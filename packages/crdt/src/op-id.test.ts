@@ -1,6 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import { compareOpIds, opId, opIdEquals } from './op-id';
+import { compareOpIds, isOpId, opId, opIdEquals, opIdKey, parseOpIdKey } from './op-id';
 import { replicaId } from './replica-id';
 import { opIdArb } from './test-support';
 
@@ -13,6 +13,36 @@ describe('opId', () => {
       expect(() => opId(bad, a)).toThrow(RangeError);
     }
     expect(opId(1, a)).toEqual({ counter: 1, replicaId: 'a' });
+  });
+});
+
+describe('opIdKey and parseOpIdKey', () => {
+  it('write ids as counter@replica and read them back', () => {
+    expect(opIdKey(opId(12, replicaId('ab-1')))).toBe('12@ab-1');
+    expect(parseOpIdKey('12@ab-1')).toEqual({ counter: 12, replicaId: 'ab-1' });
+    fc.assert(
+      fc.property(opIdArb, (id) => {
+        expect(parseOpIdKey(opIdKey(id))).toEqual(id);
+      }),
+    );
+  });
+
+  it('reject anything that is not exactly an id', () => {
+    const bad = ['', '0@a', '01@a', '1@', '@a', '1@a b', 'x', '1.5@a', '-1@a', '1@a@b', ' 1@a'];
+    for (const text of [...bad, '9007199254740993@a', `1@${'x'.repeat(65)}`]) {
+      expect(() => parseOpIdKey(text)).toThrow(RangeError);
+    }
+  });
+});
+
+describe('isOpId', () => {
+  it('accepts well-formed ids and rejects other data', () => {
+    expect(isOpId(opId(1, a))).toBe(true);
+    expect(isOpId({ counter: 3, replicaId: 'b' })).toBe(true);
+    const bad = [null, undefined, 1, 'x', [], {}, { counter: 0, replicaId: 'a' }];
+    for (const value of [...bad, { counter: 1.5, replicaId: 'a' }, { counter: 1, replicaId: 'a b' }]) {
+      expect(isOpId(value)).toBe(false);
+    }
   });
 });
 

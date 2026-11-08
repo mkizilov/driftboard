@@ -22,7 +22,7 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
-| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
+| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
 | `packages/protocol` | Sync message types validated with zod.                                     |
 | `apps/server`       | Node 22 sync server: `ws` + `better-sqlite3`; databases in `./.data/`.     |
 | `apps/web`          | React 18 + Vite client.                                                    |
@@ -83,7 +83,7 @@ disable those rules.
 
 ## Known state
 
-The scaffold and all `packages/crdt` code (turns 1-4) were written in an environment with no
+The scaffold and all `packages/crdt` code (turns 1-5) were written in an environment with no
 network access, so no `pnpm install` has run: there is no `pnpm-lock.yaml` yet and `pnpm check` has
 not been executed. The crdt tests were only run under throwaway minimal stand-ins for Vitest and
 fast-check (no shrinking, different random streams) on Node's built-in type stripping, and never

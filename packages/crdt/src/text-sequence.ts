@@ -91,7 +91,8 @@ function assertOpId(id: OpId): void {
   }
 }
 
-function assertValidOp(op: TextOp): void {
+/** Throws `RangeError` if `op` is not a well-formed operation (for data from outside the process). */
+export function assertValidTextOp(op: TextOp): void {
   if (op.type === 'insert') {
     assertOpId(op.id);
     if (op.parent !== null) assertOpId(op.parent);
@@ -219,12 +220,20 @@ export class TextSequence {
    * Applies an operation from another replica (or one of this replica's own, which is a no-op).
    * Operations may arrive in any order and more than once: one whose parent or target is missing
    * is held in the causal buffer until that operation arrives.
+   *
+   * `onApplied` is called, as it happens, for each operation that changed the sequence: this one
+   * and any held ones it released, but not duplicates.
    */
-  apply(op: TextOp): void {
-    assertValidOp(op);
+  apply(op: TextOp, onApplied?: (applied: TextOp) => void): void {
+    assertValidTextOp(op);
     this.#buffer.receive(op, (ready) => {
-      if (ready.type === 'insert') this.#integrateInsert(ready);
-      else this.#integrateDelete(ready);
+      if (ready.type === 'insert') {
+        const isNew = !this.#nodes.has(opIdKey(ready.id));
+        this.#integrateInsert(ready); // also rejects an id reused for a different character
+        if (isNew) onApplied?.(ready);
+      } else if (this.#integrateDelete(ready)) {
+        onApplied?.(ready);
+      }
     });
   }
 
@@ -245,13 +254,14 @@ export class TextSequence {
     return node;
   }
 
-  #integrateDelete(op: TextDeleteOp): void {
+  /** Returns whether the operation changed anything. */
+  #integrateDelete(op: TextDeleteOp): boolean {
     const node = this.#nodes.get(opIdKey(op.target));
     if (node === undefined) throw new Error('Invariant violated: delete target not applied');
-    if (!node.deleted) {
-      node.deleted = true;
-      this.#dirty = true;
-    }
+    if (node.deleted) return false;
+    node.deleted = true;
+    this.#dirty = true;
+    return true;
   }
 
   /** Rebuilds the document-order lists with an explicit stack, so long runs cannot overflow it. */

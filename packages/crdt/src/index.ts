@@ -6,6 +6,17 @@ export type {
   AwMapPutOp,
   AwMapRemoveOp,
 } from './aw-map';
+export { Board } from './board';
+export type { BoardOptions, NoteInit } from './board';
+export {
+  boardOpFromJson,
+  boardOpToJson,
+  deserializeBoardOps,
+  serializeBoardOps,
+} from './board-json';
+export type { JsonObject, JsonValue } from './board-json';
+export { BoardFormatError, NOTE_COLORS, UnknownNoteError, isNoteColor } from './board-ops';
+export type { BoardChange, BoardOp, NoteColor, NoteFields, NoteView } from './board-ops';
 export { CausalBuffer } from './causal-buffer';
 export type { CausalBufferOptions } from './causal-buffer';
 export { createManualClock } from './clock';
@@ -25,7 +36,7 @@ export type { HlcTimestamp, HybridLogicalClockOptions } from './hlc';
 export { LamportClock } from './lamport';
 export { LwwRegister } from './lww-register';
 export type { LwwSetOp } from './lww-register';
-export { compareOpIds, opId, opIdEquals, opIdKey } from './op-id';
+export { compareOpIds, isOpId, opId, opIdEquals, opIdKey, parseOpIdKey } from './op-id';
 export type { LamportTimestamp, OpId } from './op-id';
 export type { Ordering } from './ordering';
 export { compareReplicaIds, generateReplicaId, isReplicaId, replicaId } from './replica-id';

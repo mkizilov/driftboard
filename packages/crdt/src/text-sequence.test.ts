@@ -291,6 +291,25 @@ describe('TextSequence causal delivery', () => {
     expect(s.nodes().map((n) => n.deleted)).toEqual([true]);
   });
 
+  it('reports each operation that changed the sequence, including held ones it releases', () => {
+    const origin = seq('a');
+    const [first, second] = origin.insert(0, 'ab');
+    const [remove] = origin.delete(0, 1);
+    const s = seq('b');
+    const applied: TextOp[] = [];
+    const record = (op: TextOp): void => {
+      applied.push(op);
+    };
+    s.apply(must(second), record);
+    expect(applied).toEqual([]);
+    s.apply(must(first), record);
+    expect(applied).toEqual([first, second]);
+    s.apply(must(first), record); // duplicate insert
+    s.apply(must(remove), record);
+    s.apply(must(remove), record); // already deleted
+    expect(applied).toEqual([first, second, remove]);
+  });
+
   it('holds duplicates of a waiting operation without applying them twice', () => {
     const ops = seq('a').insert(0, 'abc');
     const s = seq('b');

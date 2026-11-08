@@ -1,4 +1,4 @@
-import { createManualClock } from './clock';
+import { createManualClock, type Clock, type ManualClock } from './clock';
 import { HybridLogicalClock } from './hlc';
 import { replicaId, type ReplicaId } from './replica-id';
 
@@ -15,7 +15,9 @@ const REFERENCE_REPLICA = replicaId('ref');
 
 export interface ReplicaContext {
   readonly replicaId: ReplicaId;
-  /** This replica's hybrid clock, driven by a physical clock that the harness moves, even backwards. */
+  /** The replica's physical clock. The harness moves it between steps, even backwards. */
+  readonly physicalClock: Clock;
+  /** A hybrid clock driven by `physicalClock`, for CRDTs that need timestamps from the harness. */
   readonly clock: HybridLogicalClock;
 }
 
@@ -30,8 +32,11 @@ export interface ReplicaContext {
  */
 export interface ConvergenceSpec<S, Op, Intent> {
   readonly name: string;
-  /** Fresh, empty state for a replica. */
-  readonly create: (replica: ReplicaId) => S;
+  /**
+   * Fresh, empty state for a replica. A state that keeps its own clock should read
+   * `ctx.physicalClock`, so that the harness's clock jumps reach it.
+   */
+  readonly create: (replica: ReplicaId, ctx: ReplicaContext) => S;
   /**
    * Prepare phase: build the operations for an intent from the replica's current state, in the
    * order they must be applied (later ones may depend on earlier ones). Empty = nothing to do.
@@ -131,17 +136,19 @@ export function runScenario<S, Op, Intent>(
   if (!Number.isInteger(count) || count < MIN_REPLICAS || count > MAX_REPLICAS) {
     throw new RangeError(`replicas must be ${MIN_REPLICAS}-${MAX_REPLICAS}, got ${count}`);
   }
-  const ids = Array.from({ length: count }, (_, i) => replicaId(`r${i}`));
-  const physical = ids.map(() => createManualClock(INITIAL_TIME_MS));
-  const contexts: ReplicaContext[] = ids.map((id, i) => ({
+  const makeContext = (id: ReplicaId, physicalClock: ManualClock): ReplicaContext => ({
     replicaId: id,
+    physicalClock,
     clock: new HybridLogicalClock({
       replicaId: id,
-      physicalClock: at(physical, i),
+      physicalClock,
       maxDriftMs: Number.MAX_SAFE_INTEGER,
     }),
-  }));
-  const states: S[] = ids.map((id) => spec.create(id));
+  });
+  const ids = Array.from({ length: count }, (_, i) => replicaId(`r${i}`));
+  const physical = ids.map(() => createManualClock(INITIAL_TIME_MS));
+  const contexts = ids.map((id, i) => makeContext(id, at(physical, i)));
+  const states: S[] = ids.map((id, i) => spec.create(id, at(contexts, i)));
   const applied = ids.map(() => new Set<number>());
   const log: LoggedOp<Op>[] = [];
   const history: RecordedState<S>[] = states.map((state) => ({
@@ -215,7 +222,8 @@ export function runScenario<S, Op, Intent>(
   }
 
   const replay = (indices: ReadonlySet<number>): S => {
-    let state = spec.create(REFERENCE_REPLICA);
+    const context = makeContext(REFERENCE_REPLICA, createManualClock(INITIAL_TIME_MS));
+    let state = spec.create(REFERENCE_REPLICA, context);
     log.forEach((entry, index) => {
       if (indices.has(index)) state = spec.apply(state, entry.op);
     });

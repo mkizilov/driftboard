@@ -1,5 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
+import type { Clock } from './clock';
 import { checkConvergence, type CheckableSpec } from './convergence';
 import { runScenario } from './convergence-scenario';
 
@@ -111,6 +112,30 @@ describe('checkConvergence', () => {
     expect(() => checkConvergence(setSpec, { replicas: { min: 3, max: 6 } })).toThrow(RangeError);
     const tooFew = { replicas: 2, steps: [], flushPicks: [], mergePicks: [] };
     expect(() => runScenario(setSpec, tooFew)).toThrow(RangeError);
+  });
+
+  it('gives create the replica clock, which the harness moves, even backwards', () => {
+    let backwards = 0;
+    let created = 0;
+    const clockProbe: CheckableSpec<{ clock: Clock; last: number }, number, number> = {
+      name: 'clock probe',
+      intentArb: fc.constant(0),
+      create: (_replica, ctx) => {
+        created += 1;
+        return { clock: ctx.physicalClock, last: -1 };
+      },
+      prepare: (state) => {
+        const now = state.clock.now();
+        if (now < state.last) backwards += 1;
+        state.last = now;
+        return [now];
+      },
+      apply: (state) => state,
+      snapshot: () => 0,
+    };
+    checkConvergence(clockProbe, { numRuns: 100 });
+    expect(created).toBeGreaterThanOrEqual(100 * 4); // 3 replicas and the reference, per run
+    expect(backwards).toBeGreaterThan(0);
   });
 
   it('supports states that apply operations in place', () => {

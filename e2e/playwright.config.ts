@@ -1,5 +1,5 @@
 import { defineConfig } from '@playwright/test';
-import { SYNC_URL, WEB_PORT, WEB_URL } from './support/env';
+import { browsersFromEnv, SYNC_URL, WEB_PORT, WEB_URL } from './support/env';
 
 // The web app is the production build, served by `vite preview`, told where the sync server is.
 // It goes to its own folder so that it does not replace the build in apps/web/dist.
@@ -17,7 +17,7 @@ export default defineConfig({
   timeout: 90_000,
   expect: { timeout: 10_000 },
   reporter: 'list',
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: browsersFromEnv().map((browserName) => ({ name: browserName, use: { browserName } })),
   webServer: {
     command: `${vite} build --outDir ${bundle} --emptyOutDir && ${vite} preview --outDir ${bundle} --port ${WEB_PORT} --strictPort`,
     cwd: '..',

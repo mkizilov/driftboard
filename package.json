@@ -2,6 +2,7 @@
   "name": "driftboard",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Local-first collaborative sticky-note board.",
   "type": "module",
   "packageManager": "pnpm@9.15.9",

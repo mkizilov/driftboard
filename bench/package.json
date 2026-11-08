@@ -2,6 +2,7 @@
   "name": "@driftboard/bench",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "driftboard benchmarks: text sequence, board loading, sync after a long offline period, and the size of the wire formats.",
   "type": "module",
   "engines": {

@@ -2,6 +2,7 @@
   "name": "@driftboard/e2e",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "driftboard end-to-end tests: Playwright drives the real server and web app from several browser contexts.",
   "type": "module",
   "engines": {

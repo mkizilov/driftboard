@@ -2,6 +2,7 @@
   "name": "@driftboard/crdt",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Pure CRDT library for driftboard: no runtime dependencies, no I/O, injected clocks.",
   "type": "module",
   "exports": {

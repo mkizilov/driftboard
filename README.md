@@ -15,6 +15,7 @@ for a sceptical review of the CRDT library, [ROADMAP.md](ROADMAP.md) for what is
 - [How it is tested](#how-it-is-tested)
 - [Status](#status)
 - [Known limitations](#known-limitations)
+- [License](#license)
 
 ## Quick start
 
@@ -496,3 +497,31 @@ replicas can disagree.
 
 Requires Node 22 (`.nvmrc`). Everything stays inside this folder: dependencies in `node_modules`, the
 pnpm store in `.pnpm-store`, SQLite databases in `.data/`.
+
+## License
+
+driftboard is released under the [MIT License](LICENSE), copyright 2026 Mykyta Kizilov. Every
+`package.json` in the workspace says `"license": "MIT"`, and the container image carries the same
+`LICENSE`.
+
+**What is in this repository.** Everything under `apps/`, `packages/`, `bench/` and `e2e/` was written
+for it, including the application icons (a hand-written SVG, and PNGs drawn by
+`apps/web/scripts/make-icons.mjs`). No third-party source code is copied in, so there are no
+third-party notices to keep in the tree. The text CRDT follows the Fugue tree of Matthew Weidner and
+Martin Kleppmann, ["The Art of the Fugue: Minimizing Interleaving in Collaborative Text
+Editing"](https://arxiv.org/abs/2305.00583) (IEEE TPDS 36(11), 2025): the base Fugue tree, not
+FugueMax, and not compared line by line with their code ([CRDT-REVIEW.md](CRDT-REVIEW.md)).
+
+**Dependencies** keep their own licenses. On 2026-11-08 `pnpm licenses list` showed 559 packages in the
+install, 52 of them for production (40 MIT, 7 ISC, 2 Apache-2.0, 1 BSD-3-Clause and 2 offered under
+several licenses), and none under a copyleft license. Two development-only packages are not plain
+software licenses: `caniuse-lite` (CC-BY-4.0, data used by the build tools) and `argparse`
+(Python-2.0); neither is part of what the server or the web app ships.
+
+**Built artifacts are not fully covered yet.** The web bundle includes React, its scheduler, `idb`
+(ISC), `zod` and `workbox-window` (MIT). The minified bundle keeps React's license comments but
+not the notices of the other three, and no notices file is produced with the build (`ROADMAP.md`,
+step 13). A production install keeps each package's license file under `node_modules`: 51 of the 52
+production packages in this install have one, and the exception is a platform binary of `esbuild`.
+Whether the container image keeps them has not been checked, because the image was never built.
+Anyone who publishes a built bundle or image should add the notices first.

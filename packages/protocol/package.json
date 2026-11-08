@@ -2,6 +2,7 @@
   "name": "@driftboard/protocol",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "Sync protocol for driftboard: zod-validated messages and the pure sync logic.",
   "type": "module",
   "exports": {

@@ -53,6 +53,7 @@ RUN --mount=type=cache,id=driftboard-pnpm,target=/app/.pnpm-store \
 
 # ---- runtime ---------------------------------------------------------------------------------------
 FROM node:${NODE_VERSION}-bookworm-slim AS runtime
+LABEL org.opencontainers.image.licenses="MIT"
 ENV NODE_ENV=production \
     DRIFTBOARD_HOST=0.0.0.0 \
     DRIFTBOARD_PORT=22100 \
@@ -61,6 +62,7 @@ ENV NODE_ENV=production \
 WORKDIR /app
 # node_modules of the workspace (symlinks between its members, so the layout must stay the same).
 COPY --from=server-deps /app /app
+COPY LICENSE ./
 COPY tsconfig.base.json ./
 COPY packages/crdt packages/crdt
 COPY packages/protocol packages/protocol

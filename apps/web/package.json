@@ -2,6 +2,7 @@
   "name": "@driftboard/web",
   "version": "0.0.0",
   "private": true,
+  "license": "MIT",
   "description": "driftboard web client (React 18 + Vite).",
   "type": "module",
   "scripts": {

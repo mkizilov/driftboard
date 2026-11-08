@@ -3,8 +3,8 @@
 A local-first collaborative sticky-note board. Everyone who has the link sees the same board and can
 edit it at the same time, with or without a network. See [DESIGN.md](DESIGN.md) for the details
 behind this page, [PERFORMANCE.md](PERFORMANCE.md) for measurements, [CRDT-REVIEW.md](CRDT-REVIEW.md)
-for a sceptical review of the CRDT library, and [AGENTS.md](AGENTS.md) for commands and contribution
-rules.
+for a sceptical review of the CRDT library, [ROADMAP.md](ROADMAP.md) for what is left to do, and
+[AGENTS.md](AGENTS.md) for commands and contribution rules.
 
 - [Quick start](#quick-start)
 - [What local-first means here](#what-local-first-means-here)
@@ -13,6 +13,7 @@ rules.
 - [The sync protocol](#the-sync-protocol)
 - [Running it in production](#running-it-in-production)
 - [How it is tested](#how-it-is-tested)
+- [Status](#status)
 - [Known limitations](#known-limitations)
 
 ## Quick start
@@ -412,14 +413,43 @@ layers; `pnpm e2e` the last.
    and a seeded **monkey test** of 200 random actions across three contexts. Every test ends by
    requiring identical boards in all contexts.
 
-Benchmarks (`pnpm bench:report`) are scenarios with numbers in `PERFORMANCE.md`: 100,000 operations
-applied, a board of 1,000 notes loaded, a sync after a long offline period.
+Benchmarks (`pnpm bench:report` for the tables, `pnpm bench` under Vitest) are scenarios with numbers
+in `PERFORMANCE.md`: 100,000 operations applied, a board of 1,000 notes loaded, a sync after a long
+offline period.
 
 **Not covered.** Chromium only. The Docker files have not been built here (no Docker in the
 environment); their stages were reproduced as plain commands from the lockfile and the resulting
 server was driven by hand in Chromium, which is not an automated test. The service worker and the
-production server's static files are covered by unit tests and by that hand check, not by `pnpm e2e`. Nothing has run on a phone, on Safari or Firefox, or against a real network (latency,
-proxies, dropped connections). Presence is not asserted by the end-to-end suite.
+production server's static files are covered by unit tests and by that hand check, not by `pnpm e2e`.
+Nothing has run on a phone, on Safari or Firefox, or against a real network (latency, proxies,
+dropped connections), or with many connections at once. Presence is not asserted by the end-to-end
+suite. The GitHub workflow has never run.
+
+## Status
+
+Four words are used here and in [ROADMAP.md](ROADMAP.md). **Verified**: implemented, and a check that
+was actually run exercised it. **Partial**: implemented, with a known gap. **Unverified**: written,
+never run. **Planned**: designed, not written. Last checked on 2026-11-08 with Node 22.12 and pnpm
+9.15.9: `pnpm check:all` exits 0 (1,295 unit, component, property, simulation and fuzz tests in six
+packages, ESLint, `tsc --noEmit` in every package, and 15 of 15 end-to-end specs in Chromium in
+46 s), `pnpm build` and `pnpm bench` exit 0, and Prettier is clean.
+
+| Area                                                                                     | Status            | Checked by                                                                                                                              | Not covered, or the gap                                                                                                                                     |
+| ---------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CRDT library: clocks, register, add-wins map, Fugue text, board, undo                    | Verified, partial | 369 tests; the convergence harness at 1,000 runs per type (50,000 once, for the review); mutation checks with scripts that are not kept | Open divergence cases O1 to O6 and the non-interleaving variant ([CRDT-REVIEW.md](CRDT-REVIEW.md); roadmap 3 to 5, 14). Not a proof.                        |
+| Sync protocol: `hello`, `ops`, `ack`, `presence`, version 3, binary frames               | Verified          | 176 tests, a three-client simulation, a fuzz test against `Room`                                                                        | The limits are not versioned (roadmap 5).                                                                                                                   |
+| Server: `ws`, SQLite, snapshots, rate limits, static files, `/healthz`                   | Verified, partial | 119 tests with real `ws` and better-sqlite3, including a fuzz test over sockets; the end-to-end suite; `pnpm start:prod` by hand        | The whole log of an open board is in memory, loading and compacting block the process, no heartbeat, no connection limit (roadmap 7, 8). Never load-tested. |
+| Hardening against peers: counter ranges, buffer limit, text size, rate limit, quarantine | Verified, partial | Hostile-input tests, two fuzz tests, a 23-mutant check with a script that is not kept                                                   | No authentication; the stream of a replica that is not connected can be extended; far-future timestamps are accepted (roadmap 6, 7).                        |
+| Web client: canvas, notes, text and caret, presence, undo                                | Verified, partial | 520 tests on React 18 and jsdom; the end-to-end suite in Chromium                                                                       | Chromium only; no touch design; no keyboard way to create or move a note; presence is not asserted end to end (roadmap 11, 15, 18).                         |
+| Offline-first: IndexedDB, write-behind, indicator, installable PWA                       | Verified, partial | Tests on fake-indexeddb and random three-device sessions; end-to-end offline with `setOffline`; the PWA by hand in Chromium             | The service worker is not in the automated suite (roadmap 11).                                                                                              |
+| End-to-end suite                                                                         | Verified          | 15 of 15 specs, one worker, 46 s, including a seeded monkey test of 200 actions                                                         | Chromium only; one seed by default.                                                                                                                         |
+| Production serving, `pnpm start:prod`                                                    | Verified          | Static-file tests including path traversal; run and driven in Chromium                                                                  | Runs through `tsx` (roadmap 13); no compression or TLS, use a reverse proxy.                                                                                |
+| `Dockerfile`, `docker-compose.yml`                                                       | Unverified        | Stages reproduced as plain commands from the lockfile                                                                                   | Never built or run (roadmap 1).                                                                                                                             |
+| GitHub workflow `check.yml`                                                              | Unverified        | none                                                                                                                                    | Never ran (roadmap 1).                                                                                                                                      |
+| Performance work: tree index, binary encoding                                            | Verified          | `bench:report` before and after; `pnpm bench` passes                                                                                    | Loading a board and syncing barely moved; one machine; Vitest's spread is wide.                                                                             |
+| Dependency security                                                                      | Partial           | `pnpm audit`; `ws` brought to a patched version                                                                                         | `zod` 3 (high) and `esbuild` through `tsx` in production; critical and high in development tools (roadmap 2).                                               |
+| Collecting tombstones, compacting version vectors, truncating the log                    | Planned           | none                                                                                                                                    | Design in `PERFORMANCE.md` (roadmap 17).                                                                                                                    |
+| Accounts and encryption                                                                  | Planned           | none                                                                                                                                    | Only the link protects a board (roadmap 20).                                                                                                                |
 
 ## Known limitations
 
@@ -455,6 +485,14 @@ replicas can disagree.
   modifiers), though both sides still agree.
 - **Clock poisoning.** A far-future timestamp from a misbehaving peer makes a note's fields win over
   later writes until that time is reached. It does not make replicas disagree.
+- **Dependencies have known advisories.** `ws` is current. `pnpm audit` still reports one high
+  advisory in `zod` 3, which the protocol uses to check messages (patched only in `zod` 4; frames
+  are capped at 1 MiB, which is reasoned to limit it, not tested), a moderate one in `esbuild` through
+  `tsx`, and critical and high ones in development tools (Vitest, Vite, Playwright). `ROADMAP.md`,
+  step 2.
+- **No keyboard-only use, no audit.** A note is created by double-clicking and moved by dragging;
+  the keyboard handles undo, redo and the name field. Controls have labels, but accessibility has not
+  been tested with a tool or a screen reader.
 
 Requires Node 22 (`.nvmrc`). Everything stays inside this folder: dependencies in `node_modules`, the
 pnpm store in `.pnpm-store`, SQLite databases in `.data/`.

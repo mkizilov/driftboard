@@ -9,14 +9,14 @@ repository today, **[planned]** is designed here but not yet implemented.
 
 ## Packages
 
-| Path                | Role                                                                   | Status      |
-| ------------------- | ---------------------------------------------------------------------- | ----------- |
-| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks. | implemented |
-| `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.              | implemented |
-| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.  | implemented |
-| `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.        | implemented |
-| `e2e`               | Playwright end-to-end suite: real server and build, several browsers.  | implemented |
-| `bench`             | Benchmarks and the report behind `PERFORMANCE.md`.                     | implemented |
+| Path                | Role                                                                           | Status      |
+| ------------------- | ------------------------------------------------------------------------------ | ----------- |
+| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks.         | implemented |
+| `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.                      | implemented |
+| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.          | implemented |
+| `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.                | implemented |
+| `e2e`               | Playwright end-to-end suite: real server and build, several Chromium contexts. | implemented |
+| `bench`             | Benchmarks and the report behind `PERFORMANCE.md`.                             | implemented |
 
 Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
 `crdt`; `crdt` depends on nothing.
@@ -900,7 +900,7 @@ name, color }`. The cursor is the pointer in _board_ coordinates (so it is right
 **Not yet:** presence shows the focused note, not the caret or selection inside it. The server
 cannot tell a frozen tab on an open connection from a quiet one, which is why timing out is the
 clients' job. Cursors do not follow a person who scrolls the page rather than the canvas. There is
-no undo, no keyboard shortcuts for notes and no touch-specific design beyond pointer events.
+no keyboard shortcuts for notes (undo and redo have theirs) and no touch-specific design beyond pointer events.
 Concurrent edits of the same word by two people merge as the sequence CRDT dictates, which can read
 oddly.
 

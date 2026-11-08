@@ -1,20 +1,32 @@
-# driftboard: project boundaries and working agreement
+# driftboard: working agreement
 
-- Work only in `/Users/mk-rune/test_projects/12-driftboard`. This is one of fourteen independent repositories.
-- Do not read, modify, clean up, or run commands in sibling repositories or the user's configuration.
-- Work autonomously: choose sensible defaults and document assumptions; do not ask questions or delegate.
-- Never install anything globally or use sudo, Homebrew, launchd, host credentials, or host Docker sockets.
-- Dependencies, toolchains, caches, browser binaries, SDKs, temporary files and test data stay in this repository. Preserve the supplied project-local environment. Python packages go in `.venv`.
-- `.agent-local/` is ignored, project-local build/runtime state. `.opencode/` is managed orchestration configuration; do not change or remove it or bypass the sandbox.
-- Use existing system tools read-only, or install pinned tools under this repository. Do not change shell profiles, user settings, Keychain, or global Git settings.
-- Bind test servers to loopback; use ports 22100–22199. Limit build/test workers to two unless a required benchmark explicitly needs more.
-- Docker-dependent integration tests must remain reproducible but be reported as unverified here if they require access outside this repository. Do not bypass this boundary.
-- Do not touch attached hardware, enroll services, flash firmware, install agents, or alter OS settings. Supply manual checklists for such steps.
-- Implement only the current numbered prompt, preserving prior behavior. Run appropriate checks, fix failures, and report genuine limitations without fabricating test or benchmark results.
-- Before finishing every numbered turn: stop its servers/watchers, remove scratch outputs, update relevant documentation, and make a local conventional-commit Git commit. Do not push.
-- End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
+## Boundaries
 
-Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+- Work only inside this repository. Do not read, modify, clean up, or run commands in other
+  repositories or in the user's configuration.
+- Work autonomously: choose sensible defaults and document assumptions instead of stopping to ask.
+- Never install anything globally or use sudo, Homebrew, launchd, host credentials, or host Docker
+  sockets.
+- Dependencies, toolchains, caches, browser binaries, SDKs, temporary files and test data stay in this
+  repository. Use the project-local environment (`.agent-local/env.sh`, see Commands) and keep it
+  intact. Python packages, if ever needed, go in `.venv`.
+- `.agent-local/` is git-ignored, project-local build and runtime state. `.opencode/` and
+  `.cortexkit/` are tool-managed local state: do not change or remove them, and do not bypass the
+  sandbox.
+- Use existing system tools read-only, or install pinned tools under this repository. Do not change
+  shell profiles, user settings, Keychain, or global Git settings.
+- Bind test servers to loopback and use ports 22100–22199 only. Limit build and test workers to two
+  unless a benchmark explicitly needs more.
+- Do not operate host Docker. Docker-dependent checks must stay reproducible and be reported as
+  unverified where they cannot run.
+- Do not touch attached hardware, enroll services, flash firmware, install agents, or alter OS
+  settings. Supply manual checklists for such steps.
+- Report genuine limitations. Never fabricate test or benchmark results, and never weaken a test to
+  make it pass.
+- Before finishing any piece of work: stop its servers and watchers, remove scratch outputs, update
+  the relevant documentation, and make a local conventional-commit Git commit. Do not push.
+- End with a short summary of changes, checks actually run, remaining limitations, and the commit
+  hash.
 
 ## Project architecture
 
@@ -39,8 +51,11 @@ separate library build step. The server runs through `tsx`.
 
 ## Commands
 
-Run from the repository root. Use pnpm through corepack (`corepack enable`); the version is pinned by
-`packageManager`, Node by `.nvmrc` / `engines`.
+Run from the repository root. Node is pinned by `.nvmrc` / `engines` (22.12) and pnpm by
+`packageManager` (9.15.9, through corepack on an ordinary machine). Here the host has neither in that
+version, so both are installed under `.agent-local/tools`: run `source .agent-local/env.sh` first, which
+puts them on `PATH` and points HOME and every cache at `.agent-local`. Any Node 22.12 with pnpm 9 does
+as well.
 
 | Command             | What it does                                                                                                                                            |
 | ------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
@@ -51,7 +66,7 @@ Run from the repository root. Use pnpm through corepack (`corepack enable`); the
 | `pnpm typecheck`    | `tsc --noEmit` in every package.                                                                                                                        |
 | `pnpm format`       | Prettier write; `pnpm format:check` verifies without writing.                                                                                           |
 | `pnpm check`        | `pnpm lint && pnpm typecheck && pnpm test`: the local gate.                                                                                             |
-| `pnpm bench`        | `vitest bench` over `bench/src/*.bench.ts` (heavy; never run here).                                                                                     |
+| `pnpm bench`        | `vitest bench` over `bench/src/*.bench.ts` (about 45 s, up to 2.5 GB of memory; few samples of the heavy scenarios, so a wide spread).                  |
 | `pnpm bench:report` | `bench/src/report.ts`: each scenario once, as Markdown tables, with heap numbers (`--expose-gc`). About 10 s and 2 GB resident on the author's machine. |
 | `pnpm e2e:install`  | Install Playwright's Chromium into the project (`PLAYWRIGHT_BROWSERS_PATH=0`). Once.                                                                    |
 | `pnpm e2e`          | Playwright E2E suite: builds the web app, starts both servers, runs the specs (one worker, a few minutes).                                              |
@@ -100,53 +115,37 @@ disable those rules.
 4. Give a short summary: what changed, checks actually run, remaining limitations.
 5. Make a conventional-commit git commit (`feat:`, `fix:`, `chore:`, `docs:`, ...). Do not push.
 
-## Known state
+## Verification status
 
-Turns 1-13 were written with no network access, on throwaway stand-ins for Vitest, fast-check, zod,
-better-sqlite3 and `ws`. Turn 14 had network access: the project's tools were installed into the
-repository (pnpm 9.15.9 and Node 22.12.0 under `.agent-local/tools`, because the host has Node 26 and
-no pnpm; `.agent-local/env.sh` puts them first on `PATH` and points HOME and the caches at
-`.agent-local`; both are git-ignored, and any Node 22.12 with pnpm 9 does as well),
-`pnpm-lock.yaml` was generated and committed, CI now installs with `--frozen-lockfile`, and
-everything ran on the real packages for the first time.
+`README.md` ("Status") says, area by area, what is implemented, verified, partial or unverified, and
+`ROADMAP.md` ranks what is left. Keep both true: write that something passes only if you ran it, and
+say what a check does not cover.
 
-What now runs for real and passes: `pnpm test` in every package (CRDT 369 tests, protocol 176, server
-119 including `server.test.ts` over real `ws` and better-sqlite3 and the fuzz test, web 520 including
-the component tests on React 18 with jsdom and `storage.test.ts` on fake-indexeddb, bench scenarios
-15, e2e helpers 96), `tsc --noEmit` in every package, ESLint and Prettier. That first run found and
-fixed real defects of the earlier turns (commit `c005fec`): `IdbBoardStorage.write` left half a
-batch behind when a value could not be stored, `NoteCard` kept saying its person was editing a note
-that was deleted under it, the bench package's Vitest `benchmark` option was in the wrong place (so
-`vitest bench` would have ignored it), and some tests that had only ever agreed with the stand-ins.
-In the turn-14 commit the first real `pnpm build` of the web app failed (and so would `pnpm e2e`):
-`virtual:pwa-register` imports `workbox-window`, which the app did not declare; it does now.
+Run for real on Node 22.12 and pnpm 9.15.9 with the real packages (Vitest, fast-check, zod, `ws`,
+better-sqlite3, React, jsdom, fake-indexeddb, Playwright with Chromium): `pnpm check` (ESLint,
+`tsc --noEmit` in every package, Prettier, all unit, component, property, simulation and fuzz tests),
+`pnpm build`, `pnpm e2e` (so `pnpm check:all`), `pnpm bench` and `pnpm bench:report`, and
+`pnpm start:prod` driven by hand in headless Chromium (create a board, edit from two contexts, reload;
+with the service worker allowed, a reload and a cold second tab with the network cut still show the
+board). Those hand checks were throwaway scripts and are not in the repository.
 
-**End-to-end (`e2e`, turn 12), first real run in turn 15: all 15 specs passed (46 s)**, including the
-200-action monkey test, going offline with `context.setOffline`, killing and restarting the server
-mid-typing, and reloads. The browser is installed with `pnpm e2e:install` (it lands in
-`node_modules`, which is ignored). The production page was also driven by hand in headless Chromium
-against `pnpm start:prod` and against the assembled container layout (create a board, add a note,
-type, a second context sees it, concurrent typing merges, reload; and, with the service worker
-allowed, a reload and a cold second tab with the network cut still show the board). Those hand checks
-are throwaway scripts and are not part of the repository.
+Not verified:
 
-Still unverified:
+- **The `Dockerfile` and `docker-compose.yml` were never built or run**: Docker was not available. Their
+  stages were reproduced as plain commands from the lockfile (`DESIGN.md`, "Production build and
+  container"), which covers the dependency set and the layout, not the syntax of the files, the base
+  image, `apt-get`, the cache mount, the health check or the compose options.
+- **`.github/workflows/check.yml` has never run** on GitHub (the repository has not been published
+  from here), including its container job.
+- Browsers other than Chromium, touch devices, a real network (latency, proxies, dropped connections),
+  many connections at once, and accessibility beyond the labels the component tests look for.
+- The end-to-end suite does not exercise the service worker (it blocks workers so that "offline"
+  means the network alone) and does not assert presence.
+- `pnpm audit` reports known advisories, mostly in development tools and one in `zod` 3 (see
+  `ROADMAP.md`, step 2). The mutation checks quoted in the docs were run with scripts that are not
+  in the repository.
 
-- **The `Dockerfile` and `docker-compose.yml` were never built or run**: Docker was not available.
-  Their stages were reproduced as plain commands from the lockfile (see `DESIGN.md`, "Production
-  build and container"), which covers the dependency set and the layout, not the syntax of the files,
-  the base image, `apt-get`, the cache mount, the health check or the compose options. Build them with
-  `docker compose up --build` and fix what that shows.
-- Browsers other than Chromium, a phone, Safari and Firefox; a real network.
-- `pnpm bench` (`vitest bench`) has not been run. `pnpm bench:report` has, on Node 22.12.
-- The numbers in `PERFORMANCE.md` were measured on Node 26.13; a re-run on Node 22.12 after turn 14
-  was within about 15% of them on every scenario (not a controlled comparison).
-
-Turn 14 (security and robustness) is described in `DESIGN.md`, "Security and robustness", and turn
-15 (production build, README, review of `packages/crdt`) in "Production build and container" and in
-`CRDT-REVIEW.md`, whose cases are tests in `packages/crdt/src/review.test.ts`. The README's CRDT
-examples are tests too (`packages/crdt/src/readme-examples.test.ts`): change one with the other. The
-fuzz tests (`packages/protocol/src/fuzz.test.ts` against a `Room`; `apps/server/src/fuzz.test.ts` over
-real sockets on port 22140) found two real problems while they were written. Test ports: the server's
-WebSocket tests 22110-22139, its fuzz test 22140, its static-file tests 22141-22149, the e2e suite
-22150 and 22151, `docker compose` 22160.
+Test ports (all loopback): the server's WebSocket tests 22110-22139, its fuzz test 22140, its
+static-file tests 22141-22149, the end-to-end suite 22150 and 22151, `docker compose` 22160, and the
+unit test of `SyncServer` 22195. The CRDT review (`CRDT-REVIEW.md`) and the README's CRDT examples are
+tests too (`packages/crdt/src/review.test.ts`, `readme-examples.test.ts`): change one with the other.

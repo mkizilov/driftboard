@@ -14,14 +14,13 @@ garbage-collect tombstones. The benchmarks are in `bench/` (`pnpm bench` runs th
   Both run `bench/src/report.ts` with the same seeds and sizes, so they run the same operations. That
   is checked, not assumed: the 100,000 operations of the text benchmark have the same fingerprint
   (`2add3280`) and leave the same 67,888 characters in 83,944 nodes before and after.
-- **`vitest bench` was not run.** Vitest, like every other dependency, is not installed here (there
-  is no network). The `*.bench.ts` files are the same scenarios wrapped in `bench()`; the numbers
-  come from `report.ts`, which times each scenario once with `performance.now()`. The scenario code
-  itself is covered by `bench/src/scenarios.test.ts` at small sizes.
-- **What stands in for what.** The zod schema check of text messages is not in the sync timings (zod
-  is not installed, and the check is the same before and after); `JSON.parse` and `JSON.stringify` are.
-  Tests ran on stand-ins for Vitest, fast-check and zod, and on `node:sqlite` in place of
-  better-sqlite3; the real `ws` server and a browser were not used (see "Not measured").
+- **Where the tables come from.** `report.ts` times each scenario once with `performance.now()`. The
+  `*.bench.ts` files are the same scenarios wrapped in `bench()` for `pnpm bench`, which has its own
+  section below. The scenario code is also covered by `bench/src/scenarios.test.ts` at small sizes.
+  The "before" and the first "after" were measured at a time when dependencies could not be installed,
+  so the zod schema check of text messages is not in the sync timings (it is the same before and
+  after); `JSON.parse` and `JSON.stringify` are. Neither the real `ws` server nor a browser is in any
+  timing (see "Not measured").
 - **Heap** is `process.memoryUsage().heapUsed` after a forced collection (`--expose-gc`).
 
 ## Summary
@@ -268,36 +267,35 @@ can be a tombstone, so replicas that did see the delete go on writing operations
 ## Not measured, and limits
 
 - The tables above were made without a browser, a real WebSocket, better-sqlite3, zod or React (none
-  was installed then), on Node 26 and not the pinned Node 22. After the security work (turn 14), when
-  the real packages were installed, `pnpm bench:report` was run again on Node 22.12 (see "After the
-  security work" below); the server's `ws` adapter and the hub are exercised by the server's tests
-  with real sockets, but the Playwright suite and the web `browserSocket` in a real browser remain
-  unrun.
+  was installed then), on Node 26 and not the pinned Node 22. Once the real packages were installed,
+  `pnpm bench:report` was run again on Node 22.12 (see "After the security work" below). The
+  scenarios are in-process: no browser, socket or SQLite is in the timings, and the end-to-end suite
+  measures nothing.
 - One run per scenario on one machine (two for the full report). Numbers are for comparison between
   the two columns, not forecasts.
 - The sync scenario is in one process: it measures the work of the protocol and the boards, not
   latency or a real network.
 - Memory per node was measured on two texts only. Per-note counts on real boards are unknown.
-- `vitest bench` itself has not been run; the `*.bench.ts` files are unverified beyond their
-  imports being the same functions the report calls.
+- `vitest bench` has run (see "`pnpm bench`" below), but it takes 2 to 3 samples of the heavy
+  scenarios, so its spread is wide; use `report.ts` for the tables.
 
 ## After the security work
 
-Turn 14 made `storeAdd` parse the ids of every new operation (to hold each origin's stream to its
+The security work made `storeAdd` parse the ids of every new operation (to hold each origin's stream to its
 numbering, see "Security and robustness" in `DESIGN.md`), made `Room` count the characters of every
 note when it is created and as operations arrive, and made the board count what it holds back. To see
 what that costs, `pnpm bench:report` was run again, once, on the pinned Node 22.12 with the real
 packages installed. It is not an A/B on one runtime (the first run was Node 26.13), so differences of
 about 15% are within what the two runtimes and a single run can explain.
 
-| scenario                                                    | turn 13 (Node 26) | turn 14 (Node 22.12) |
-| ----------------------------------------------------------- | ----------------: | -------------------: |
-| 100,000 local text edits                                    |             76 ms |                74 ms |
-| apply 100,000 operations on a fresh replica (in order)      |             75 ms |                65 ms |
-| load a board of 842,485 operations, JSON, in all            |           1847 ms |              1956 ms |
-| load the same board, binary, in all                         |           1507 ms |              1517 ms |
-| sync after a long offline period (120,009 ops), JSON wire   |            314 ms |               319 ms |
-| sync after a long offline period (120,009 ops), binary wire |            311 ms |               354 ms |
+| scenario                                                    | before it (Node 26) | after it (Node 22.12) |
+| ----------------------------------------------------------- | ------------------: | --------------------: |
+| 100,000 local text edits                                    |               76 ms |                 74 ms |
+| apply 100,000 operations on a fresh replica (in order)      |               75 ms |                 65 ms |
+| load a board of 842,485 operations, JSON, in all            |             1847 ms |               1956 ms |
+| load the same board, binary, in all                         |             1507 ms |               1517 ms |
+| sync after a long offline period (120,009 ops), JSON wire   |              314 ms |                319 ms |
+| sync after a long offline period (120,009 ops), binary wire |              311 ms |                354 ms |
 
 Loading a board goes through `Board.applyRemote`, which these changes did not touch, and does not
 call `storeAdd`. The sync scenario does, on both sides, for all 120,009 operations; the binary column
@@ -308,3 +306,35 @@ The server pays for the same checks when it opens a board. Measured separately, 
 builds the per-note ledger 8 to 10 ms, `createRoom` (which includes that scan) 8 to 11 ms. That is
 about a tenth of a second on top of reading the board from the database, once per board per time
 its first client arrives.
+
+## `pnpm bench`
+
+`pnpm bench` (`vitest bench --run`, Vitest 2.1.8, Node 22.12, one machine) was run for the first time
+after everything above, and it passes (exit 0, about 45 s, 2.5 GB resident at most). Its first run
+failed: the sync scenario prepares one world per call (a reconnect uses its world up), and tinybench
+calls the function two more times than the runs, untimed, to find out whether it is async. The
+scenario ran out of worlds and reported no samples. `bench/src/sync.bench.ts` now prepares for those
+calls.
+
+Means of the final run, with the number of samples Vitest took:
+
+| benchmark                                                            |          mean |  samples |
+| -------------------------------------------------------------------- | ------------: | -------: |
+| 100,000 text operations, performed as a person types                 |         90 ms |        3 |
+| the same, applied as another replica, in order                       |         83 ms |        3 |
+| the same, in random order, through the causal buffer                 |        163 ms |        3 |
+| 10,000 edits, the whole text read after each                         |         35 ms |        3 |
+| sync after 30,000 offline and 10,000 meanwhile operations, JSON text |        283 ms |        2 |
+| the same, binary operations                                          |        236 ms |        2 |
+| load a board of 1,000 notes with long texts, from JSON               |       3479 ms |        3 |
+| the same, from the binary batch                                      |       3269 ms |        3 |
+| the same, only applying the operations to a new board                |       1484 ms |        3 |
+| encode 40,000 operations: `JSON.stringify` / `encodeOps`             | 15.3 / 5.9 ms |  33 / 86 |
+| decode 40,000 operations: `JSON.parse` / `decodeOps`                 | 36.2 / 5.0 ms | 14 / 102 |
+
+These are for checking that the benchmarks run and agree in order of magnitude with the tables above
+(binary beats JSON on the wire, the tree makes 100,000 edits take tenths of a second); they are not
+the figures to quote. The heavy scenarios are too big to repeat, so Vitest reports a relative margin
+of error of 8% to 96% for them, and a first run of the same code gave 1.9 s instead of 3.5 s for
+loading from JSON. Loading in `report.ts` (1.96 s on Node 22.12) and here are not the same
+measurement.

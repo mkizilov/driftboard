@@ -4,8 +4,18 @@ import { startSyncServer } from './server';
 
 const config = loadConfig();
 const db = openDatabase(config.dbPath);
-const server = await startSyncServer(config);
-console.log(`driftboard server listening on ws://${config.host}:${server.port} (db: ${config.dbPath})`);
+const server = await startSyncServer({
+  host: config.host,
+  port: config.port,
+  db,
+  maxMessageBytes: config.maxMessageBytes,
+  compactAfterOps: config.compactAfterOps,
+  compactIntervalMs: config.compactIntervalMs,
+  helloTimeoutMs: config.helloTimeoutMs,
+});
+console.log(
+  `driftboard server listening on ws://${config.host}:${server.port}/ws (db: ${config.dbPath})`,
+);
 
 async function shutdown(): Promise<void> {
   await server.close();

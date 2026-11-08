@@ -11,13 +11,13 @@ repository today, **[planned]** is designed here but not yet implemented.
 
 | Path                | Role                                                                     | Status      |
 | ------------------- | ------------------------------------------------------------------------ | ----------- |
-| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks.   | scaffolded  |
-| `packages/protocol` | Sync message types and zod validation (`hello`, `welcome`, `error`).     | scaffolded  |
-| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | scaffolded  |
+| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks.   | implemented |
+| `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.                | implemented |
+| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | implemented |
 | `apps/web`          | React 18 + Vite client.                                                  | scaffolded  |
 
-Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` may depend on
-`crdt` types later; `crdt` depends on nothing.
+Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
+`crdt`; `crdt` depends on nothing.
 
 ## Data model
 
@@ -319,7 +319,7 @@ and `board-json.ts` (JSON).
   The harness also checks that every local call has exactly the intended effect on what the board
   shows.
 
-## Sync protocol **[implemented as pure logic; the WebSocket server and client are planned]**
+## Sync protocol **[implemented as pure logic; the server uses it, the client wiring is planned]**
 
 Source: `packages/protocol/src`. `messages.ts` (zod schemas, parse/encode), `ops.ts` and `store.ts`
 (stamped operations and the operation store), `sync.ts` (one connection's state machine), `room.ts`
@@ -399,12 +399,94 @@ no original message may carry an operation its receiver already holds, and nobod
 error. Without faults every operation crosses exactly one link up and one link down per other
 client; a reconnect sends exactly the missing operations.
 
-**Not yet:** the server persists nothing (`Room.applied` is what to store, and `createRoom({ store })`
-how to load it; a table keyed by `(board_id, origin, seq)` fits), `apps/server` only answers a
-`hello` so far, there is no client-side wiring, operations are never compacted, and replica ids
+**Not yet:** there is no client-side wiring, operations are never compacted away, and replica ids
 must be unique per device and tab (two live tabs sharing one id would write conflicting streams;
-`conflicting_op` catches that only when the operations differ). Authentication, authorisation and
-multi-board access control are out of scope for now; the server binds to loopback by default.
+`conflicting_op` catches that only when the operations differ).
+
+## Server **[implemented]**
+
+Source: `apps/server/src`. `server.ts` (HTTP and WebSocket), `hub.ts` (rooms and validation),
+`storage.ts`, `snapshot.ts` and `db.ts` (SQLite), `board-id.ts`, `config.ts`, `main.ts`.
+
+**Endpoints.** `GET /healthz` returns `200 {"status":"ok"}` after a `SELECT 1` on the database, or
+`503 {"status":"unavailable"}` if that fails (other methods get 405, `HEAD` works). WebSocket
+clients connect to `ws://host:port/ws`; an upgrade on any other path gets 404. Everything else is 404.
+The server binds to `127.0.0.1:22100` by default.
+
+**Access.** There are no accounts. A board is reached by its id alone, so the id is a capability: the
+server accepts only ids of 22 to 128 URL-safe characters (`generateBoardId()` makes 22 random
+base64url characters, 128 bits), never lists boards, and `/healthz` reveals nothing about them. A
+`hello` with any other id is rejected. Whoever knows the id can read and write the board; there is
+no per-user access control, rate limiting or expiry yet.
+
+**Rooms.** `SyncHub` keeps one `Room` (from `@driftboard/protocol`) per board id that has a
+connection. The first `hello` for an id loads the board from SQLite; when the last connection
+leaves, the room is dropped. The hub is the glue and does no I/O of its own: it receives frames,
+runs the pure sync logic, **writes the new operations to storage before anything is sent about
+them** (so an `ack` means the operations are on disk; if storing fails the step is discarded, the
+connection is closed with 1011 and the room still matches the disk), then sends the messages.
+
+**Validation.** Every frame is checked before it reaches the sync logic, and a connection that
+fails a check gets one `error` message and is closed:
+
+| Problem | Close code |
+| --- | --- |
+| binary frame | 1003 |
+| larger than the limit (`maxMessageBytes`, default 1 MiB; also enforced by the WebSocket layer, which cuts the connection off with no reply) | 1009 |
+| not JSON, or not valid against the zod schemas | 1008 |
+| first message is not `hello`, or its board id is not acceptable | 1008 |
+| no valid `hello` within `helloTimeoutMs` (default 10 s) | 1008 |
+| protocol violation (bad version, gap, conflict, invalid operation payload, presence for another replica) | 1008 |
+| storage failure | 1011 |
+| the same replica connected again (the older connection is closed) | 4001 |
+
+Other connections, and the board, are unaffected. Compression is off, so a small frame cannot expand
+past the limit.
+
+**Storage** (SQLite under `./.data/`, schema version 2, WAL, `synchronous = FULL`, migrations in
+`db.ts`). A board's operation log is kept in two places:
+
+- `ops(board_id, origin, seq, payload)`: the **tail**, one row per operation since the last
+  compaction, primary key `(board_id, origin, seq)`.
+- `snapshots(board_id, op_count, payload, updated_at)`: the **snapshot**, every operation up to the
+  last compaction in one row: gzipped JSON `{ "v": 1, "origins": [[origin, [op, ...]], ...] }`
+  without the repeated origin and sequence numbers.
+
+New operations go to the tail (one transaction per message). `compact` folds the tail into the
+snapshot in one transaction (decode the snapshot, add the tail, write a new snapshot, delete the tail
+rows), so a crash leaves the old or the new state. Compaction runs when a board's tail reaches
+`compactAfterOps` (default 1000; after a failed attempt it waits for the tail to grow by that much
+again), and every `compactIntervalMs` (default 5 minutes) for every board with a tail, which also
+covers boards nobody has open. A failure is reported through `onError` and never closes a
+connection. Loading a board reads the snapshot row, decodes it, adds the tail and rebuilds the
+operation store, checking the stored operation count and that each origin's numbering is gapless
+(`StorageError` otherwise).
+
+The snapshot holds every operation, not a summary of the board's state, because any peer, however
+old, is caught up from the log by version vector. Compaction therefore shrinks and speeds up
+storage and loading but does not discard history.
+
+**Measured** on this machine (Node 26 `node:sqlite` standing in for better-sqlite3, synthetic
+operations that all have the same shape, one run each, no tuning): for 100,000 operations, loading
+from tail rows took 208 ms and from the snapshot 136 ms; compaction took 417 ms; the snapshot was
+294 KB against about 34 MB of database for the rows (the synthetic operations are far more
+repetitive than real ones, so the size ratio is optimistic). For 20,000 operations: 37 ms, 21 ms and
+67 ms. Real better-sqlite3 timings were not measured.
+
+**Tested** (`apps/server/src/*.test.ts`): storage, snapshots, schema migration and configuration;
+the hub with fake sockets (relaying, persistence order, room lifecycle, compaction and its failure,
+every kind of invalid input, storage failures); and `server.test.ts`, which starts the server on
+loopback ports 22110-22139 and connects real WebSocket clients (each with a `Board` and the real
+sync logic): three clients converge, one of them after editing offline, with every operation received
+exactly once; boards are isolated by id; presence is relayed; a restart keeps every board, with
+and without a snapshot; compaction by threshold and by timer; malformed text, schema violations,
+binary frames, oversized messages, a missing or bad `hello`, invalid operations and a silent
+connection are rejected and close the connection while other clients keep syncing; `/healthz`.
+
+**Not yet:** no heartbeat (a dead TCP connection is noticed only when the OS gives up on it), no limit
+on connections or rooms, compaction does not `VACUUM` (freed pages are reused but the file does not
+shrink), loading and compacting a board are synchronous and block the event loop for their duration,
+and the server holds a board's whole log in memory while it is open.
 
 ## Offline-first approach
 

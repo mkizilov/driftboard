@@ -25,4 +25,5 @@ export const ERROR_CODES = [
   'unexpected_message',
   'out_of_order',
   'conflicting_op',
+  'internal_error',
 ] as const;

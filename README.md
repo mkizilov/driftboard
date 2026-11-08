@@ -7,6 +7,8 @@ A local-first collaborative sticky-note board. See [DESIGN.md](DESIGN.md) for th
 corepack enable        # uses the pnpm version pinned in package.json
 pnpm install
 pnpm check             # lint + typecheck + tests
+pnpm e2e:install       # once: Playwright's Chromium, into this folder
+pnpm check:all         # pnpm check, then the end-to-end suite (pnpm e2e)
 ```
 
 Run the app (two terminals, loopback only):
@@ -40,6 +42,15 @@ with their name and colour, and a note that someone is typing in is outlined wit
 You get a random name and colour, kept in this browser; click your name in the bar to change it.
 This is *presence*: it is never stored, is sent at most 20 times a second, and someone who has said
 nothing for 6 seconds drops off the list.
+
+The end-to-end suite (`e2e/`, Playwright) starts the real sync server and the production web build
+on loopback ports 22110 and 22111 and opens two or three browser contexts on one board. Its specs
+type in the same note at once, move the same note at once, take one context offline with
+`context.setOffline(true)`, restart or kill the server mid-session and reload the page, and a
+randomized monkey test does 200 random actions across three contexts; every test ends by checking
+that all contexts show identical boards. `E2E_SEED=n pnpm e2e` repeats a monkey run and
+`E2E_MONKEY_RUNS=n pnpm e2e` makes n runs on consecutive seeds. A failed test keeps a Playwright
+trace per person in `e2e/test-results/`.
 
 Requires Node 22 (`.nvmrc`). Everything stays inside this folder: dependencies in `node_modules`,
 the pnpm store in `.pnpm-store`, SQLite databases in `.data/`.

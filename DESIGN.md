@@ -15,6 +15,7 @@ repository today, **[planned]** is designed here but not yet implemented.
 | `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.                | implemented |
 | `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | implemented |
 | `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.          | implemented |
+| `e2e`               | Playwright end-to-end suite: real server and build, several browsers.   | implemented |
 
 Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
 `crdt`; `crdt` depends on nothing.
@@ -776,7 +777,7 @@ oddly.
   not intercepted.
 - **Deterministic core.** Because `packages/crdt` takes its clock and ids as inputs, offline,
   reordering and partition scenarios can be simulated deterministically in unit and property tests,
-  and later in Playwright end-to-end tests.
+  and in the Playwright end-to-end tests (see *End-to-end tests*).
 
 **Not yet.** Two tabs of the same board on one device see each other's changes only through the
 server (they share the stored log but each loaded it once), so they do not sync with each other
@@ -785,10 +786,71 @@ the browser may evict it under storage pressure (`navigator.storage.persist()` i
 Presence is not stored. A dead connection is noticed by the browser's `offline` event or by the
 socket closing; there is no heartbeat on either side yet.
 
+## End-to-end tests **[implemented; not yet run, see AGENTS.md]**
+
+The unit and component tests cover the pieces; the `e2e` package (`@driftboard/e2e`) checks the
+whole: the real sync server, the production build of the web app and real browsers, with the claim
+the product makes, that everyone ends with the same board.
+
+- **What runs.** `pnpm e2e` runs Playwright with one worker and a Chromium project. Its `webServer`
+  builds the web app into `e2e/dist/web` with `VITE_SYNC_URL` pointing at the test server, and serves
+  it with `vite preview` on port 22111. A worker-scoped auto fixture, `syncServer`, starts the real
+  server (`node --import tsx apps/server/src/main.ts`, so that killing the process kills the server;
+  `tsx` on its own would leave a child behind) on port 22110 with an empty database under `.data/`
+  and with `DRIFTBOARD_COMPACT_AFTER_OPS=50`, so that boards are folded into snapshots and a restart
+  loads from one. Both ports differ from the dev servers' (22100 to 22102).
+- **People.** Fixture `openBoard('ann', 'ben', 'cat')` makes a board on the front page and opens it
+  in a browser context per name (`support/person.ts`). A context has its own IndexedDB, local
+  storage and connection, so it is another device; service workers are blocked so that the pages
+  always come from the network and going offline is the network's doing alone. A `Person` drives the
+  page the way a person does (double-click the canvas, type with the keyboard into a note's
+  textarea, drag a note by its header with the mouse, click the colour, delete, undo and redo
+  buttons) and reads what it shows (`.sync[data-state]`, each note's `data-note-id`, `data-color`,
+  inline `transform` and `z-index`, and the textarea's value), so a test sees what a user sees.
+  Failed tests keep a Playwright trace for every person.
+- **Convergence.** Every test ends with `expectConverged(people)`: everyone's indicator must say
+  *Online* (connected, nothing left to send), and then every person's board, read from the page and
+  sorted by note id, must be the same on three reads in a row (so two boards that agree by chance on
+  the way somewhere else do not pass), or the error says which note differs in which field. It also
+  fails on any uncaught error in a page.
+- **Specs** (`e2e/tests`): *concurrent typing* (two people at one place; three before, inside and
+  after a shared text, where the result is exact; one erasing a phrase while another types after it),
+  *concurrent moves* (two people dragging one note, letting go together or one while the other still
+  drags, where the result must be one of the moves whole, never an x from one and a y from the
+  other; three people dragging two notes), *offline* (`context.setOffline(true)`, typing, colouring,
+  creating, nothing reaching the others while it lasts, then `setOffline(false)` and a merge of
+  everything; two people offline in one note; many short outages), *server restart* (stop and
+  restart with edits made while it is down, kill in the middle of typing, a restart for each of three
+  people; a newcomer after the restart gets the whole board from the database) and *reload* (the
+  same board comes back, a reload in the middle of someone's typing, and a reload while the server is
+  away, which keeps what was typed and sends it when the server returns).
+- **Monkey test.** `planMonkey(seed, 200, 3)` (`support/monkey-plan.ts`) is a plan of 200 actions
+  from a seeded generator (Mulberry32, `support/rng.ts`): create, type, erase, move, recolour,
+  delete, undo, redo, go offline, come back, reload and pause, with typing the most common and text
+  that includes `é` and an emoji. The plan says what, not where: the note is a pick taken modulo the
+  notes the person sees, the caret a fraction of the text, the spot for a new note a free one found
+  from the notes on the page (`support/geometry.ts`). `runMonkey` (`support/monkey-run.ts`) carries
+  the plan out step after step without waiting for the others between steps, so what one person did
+  is still on its way when the next acts. A step that cannot be done (the note was deleted or is
+  covered, nothing to undo) is skipped and counted, and a run with fewer than 100 steps done fails as
+  not testing much. At the end everyone is put back online and `expectConverged` decides. The seed is
+  in the test's title (`E2E_SEED=n` repeats it, `E2E_MONKEY_RUNS=n` runs n consecutive seeds), and the
+  plan and the per-step report are attached to the result.
+- **Unit-tested helpers.** What can be tested without a browser is, with Vitest, by `pnpm test`: the
+  seeded generator, the plan, the runner (against a fake person), reading and comparing boards,
+  geometry, polling, and `SyncServer` (start, stop, kill and restart on the same database, against a
+  stand-in server).
+
+**Not covered.** Chromium only. The service worker and offline *page loads* (the PWA) are not
+exercised, because the suite blocks service workers; offline here means a loaded page that loses its
+network. Presence (cursors, who is editing) is not asserted. A server that comes back with an empty
+database is not tried. There are no retries: a failure is a finding.
+
 ## Local-only environment
 
 Everything runs inside the repository folder: Node is pinned in `.nvmrc` and `engines`, pnpm is
 pinned by the `packageManager` field and run through corepack, the pnpm store is `./.pnpm-store`,
-SQLite databases live in `./.data/`, and Playwright browsers will be installed into the project
-with `PLAYWRIGHT_BROWSERS_PATH=0`. Dev servers use loopback ports 22100–22199 (sync server 22100,
-Vite dev server 22101, Vite preview 22102).
+SQLite databases live in `./.data/`, and Playwright's Chromium is installed into the project with
+`PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Dev servers use loopback ports 22100–22199 (sync
+server 22100, Vite dev server 22101, Vite preview 22102); the end-to-end suite uses 22110 and 22111,
+and the unit test of `SyncServer` 22195.

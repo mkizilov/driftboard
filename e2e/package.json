@@ -1,0 +1,22 @@
+{
+  "name": "@driftboard/e2e",
+  "version": "0.0.0",
+  "private": true,
+  "description": "driftboard end-to-end tests: Playwright drives the real server and web app from several browser contexts.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "install:browsers": "PLAYWRIGHT_BROWSERS_PATH=0 playwright install chromium",
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "e2e": "PLAYWRIGHT_BROWSERS_PATH=0 playwright test"
+  },
+  "devDependencies": {
+    "@playwright/test": "1.49.1",
+    "@types/node": "22.10.2",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

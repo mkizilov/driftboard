@@ -16,7 +16,8 @@
     "typecheck": "pnpm -r --workspace-concurrency=2 typecheck",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "e2e": "node -e \"console.log('e2e: no suites yet; Playwright arrives in a later task')\"",
+    "e2e:install": "pnpm --filter @driftboard/e2e install:browsers",
+    "e2e": "pnpm --filter @driftboard/e2e e2e",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:all": "pnpm check && pnpm e2e"
   },

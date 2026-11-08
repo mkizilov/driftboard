@@ -17,3 +17,13 @@ jobs:
       # No pnpm-lock.yaml exists yet (scaffolded offline); switch to --frozen-lockfile once it is committed.
       - run: pnpm install --no-frozen-lockfile
       - run: pnpm check
+      - name: Install the browser for the end-to-end tests
+        run: pnpm --filter @driftboard/e2e exec playwright install --with-deps chromium
+        env:
+          PLAYWRIGHT_BROWSERS_PATH: '0'
+      - run: pnpm e2e
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: e2e-results
+          path: e2e/test-results

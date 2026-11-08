@@ -41,8 +41,8 @@ export default tseslint.config(
       '.venv/**',
       '.data/**',
       '.pnpm-store/**',
-      'test-results/**',
-      'playwright-report/**',
+      '**/test-results/**',
+      '**/playwright-report/**',
     ],
   },
   js.configs.recommended,
@@ -63,6 +63,12 @@ export default tseslint.config(
     files: ['apps/web/**/*.{ts,tsx}'],
     plugins: { 'react-hooks': reactHooks },
     rules: reactHooks.configs.recommended.rules,
+  },
+  {
+    // Playwright fixtures take what they depend on as a destructured first parameter, which is
+    // empty for a fixture that depends on nothing.
+    files: ['e2e/**/*.ts'],
+    rules: { 'no-empty-pattern': ['error', { allowObjectPatternsAsParameters: true }] },
   },
   {
     // The CRDT library is pure: no DOM, no Node APIs, no I/O, no wall clock, no ambient randomness.

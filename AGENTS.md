@@ -26,6 +26,7 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 | `packages/protocol` | Sync messages validated with zod (`hello`, `ops`, `ack`, `presence`, `error`; protocol version 2) and the sync logic as pure functions: operation store, per-connection session, server `Room` (which also remembers each present replica's latest presence in memory, to tell newcomers). Depends on `@driftboard/crdt`. |
 | `apps/server`       | Node 22 sync server: `ws` WebSockets (one room per unguessable board id, using the protocol's `Room`), `GET /healthz`, `better-sqlite3` in `./.data/` with each board's log as a compacted snapshot plus a tail. |
 | `apps/web`          | React 18 + Vite client: `/` creates a board, `/b/:boardId` is the canvas. Framework-free logic in `src/lib` (text diff, caret, text binding, board store, sync connection, offline storage in IndexedDB through `idb`, write-behind persistence, sync indicator, ephemeral presence: identity, throttled sender, timing-out store; undo/redo keys; viewport, route); thin React in `src/components` and `src/hooks`. Installable offline PWA through `vite-plugin-pwa` (`vite.config.ts`, `src/pwa-manifest.ts`, icons from `scripts/make-icons.mjs`). Component tests use jsdom through `src/test-render.ts`. |
+| `e2e`               | Playwright end-to-end suite (`@driftboard/e2e`). `tests/*.spec.ts` start the real sync server (fixture `syncServer`, `support/sync-server.ts`, port 22110, own database in `.data/`) and the production web build (`vite preview`, port 22111), and drive 2-3 Chromium contexts on one board through `support/person.ts`; every test ends with `expectConverged` (identical boards in all contexts). Specs: concurrent typing, simultaneous moves, `context.setOffline`, server restart/kill, page reload, and a seeded monkey test (200 random actions; `E2E_SEED`, `E2E_MONKEY_RUNS`). The pure helpers in `support/` (seeded rng, monkey plan and runner, board parsing and comparison, geometry, polling, `SyncServer`) have Vitest unit tests that `pnpm test` runs; the specs run only under `pnpm e2e`. |
 
 Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
 separate library build step. The server runs through `tsx`.
@@ -44,13 +45,17 @@ Run from the repository root. Use pnpm through corepack (`corepack enable`); the
 | `pnpm typecheck`   | `tsc --noEmit` in every package.                                           |
 | `pnpm format`      | Prettier write; `pnpm format:check` verifies without writing.              |
 | `pnpm check`       | `pnpm lint && pnpm typecheck && pnpm test`: the local gate.                |
-| `pnpm e2e`         | Playwright E2E suite. Placeholder until the suite exists (later task).     |
-| `pnpm check:all`   | `pnpm check && pnpm e2e`.                                                  |
+| `pnpm e2e:install` | Install Playwright's Chromium into the project (`PLAYWRIGHT_BROWSERS_PATH=0`). Once. |
+| `pnpm e2e`         | Playwright E2E suite: builds the web app, starts both servers, runs the specs (one worker, a few minutes). |
+| `pnpm check:all`   | `pnpm check && pnpm e2e`: the full local gate.                             |
 
 Dev servers: `pnpm --filter @driftboard/server dev` (ws://127.0.0.1:22100/ws, `GET /healthz`) and
 `pnpm --filter @driftboard/web dev` (http://127.0.0.1:22101). Use only loopback ports 22100–22199.
 
-When Playwright is added, install its browsers into the project with `PLAYWRIGHT_BROWSERS_PATH=0`.
+Playwright's browser lives in the project: `pnpm e2e:install` and `pnpm e2e` both set
+`PLAYWRIGHT_BROWSERS_PATH=0`. The suite uses ports 22110 (sync server) and 22111 (web preview), so it
+can run next to the dev servers; failed tests keep a trace per person in `e2e/test-results/`
+(`pnpm --filter @driftboard/e2e exec playwright show-trace <file>`).
 
 ## Conventions
 
@@ -116,3 +121,22 @@ is gone), so it has not been re-run; `hub.test.ts`, which covers the same path, 
 network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
 `pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
 `--frozen-lockfile`. Delete this section once that is done.
+
+The `e2e` package (turn 12) is the least verified part. Playwright and its Chromium were not
+installed (no network) and the sandbox has no browser, so **no spec has ever run**: not one browser
+context was opened, and neither the production web build under `vite preview`, nor the real server
+started by the `syncServer` fixture, nor `context.setOffline` against the real page has been seen
+working together. What did run: the Vitest unit tests of the pure helpers in `e2e/support/` (under
+the same throwaway Vitest stand-in as above), and a TypeScript check of the whole package (support,
+specs, fixtures, config) against hand-written declarations of the parts of `node:*`, Vitest and
+`@playwright/test` that it uses, which only proves the code agrees with my memory of those APIs.
+The pinned `@playwright/test` 1.49.1 is from memory like the other versions. Things most likely to
+need a fix on the first real run, in this order: the selectors and geometry in `support/person.ts`
+(the header grab point `HEADER_GRAB_X`, `elementFromPoint` checks, forced double-click), the
+`webServer` command in `playwright.config.ts` (`vite build/preview --outDir ../../e2e/dist/web`),
+`node --import tsx` starting `apps/server/src/main.ts`, timing in the restart tests (reconnect
+backoff is up to 15 s; `SYNC_TIMEOUT_MS` is 30 s), and the exact-text assertions in
+`concurrent-typing.spec.ts` and `offline.spec.ts`, which rely on `lib/caret.ts` keeping a caret in
+place when text is inserted before it (a failure there is a finding about the app, not the test).
+Run `pnpm e2e:install` once, then `pnpm e2e`; the monkey test prints its seed in its title and
+attaches its plan and per-action report.

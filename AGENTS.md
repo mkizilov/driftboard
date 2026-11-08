@@ -15,3 +15,72 @@
 - End each turn with a short summary of changes, checks actually run, remaining limitations, and commit hash. The orchestrator will provide the next prompt only after this turn ends.
 
 Extend this file with the project's language-specific architecture and verification commands while retaining these boundaries.
+
+## Project architecture
+
+pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs and sync protocol).
+
+| Path                | Purpose                                                                    |
+| ------------------- | -------------------------------------------------------------------------- |
+| `packages/crdt`     | Pure CRDT library (HLC, LWW register, add-wins map, RGA text). No runtime deps. |
+| `packages/protocol` | Sync message types validated with zod.                                     |
+| `apps/server`       | Node 22 sync server: `ws` + `better-sqlite3`; databases in `./.data/`.     |
+| `apps/web`          | React 18 + Vite client.                                                    |
+
+Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
+separate library build step. The server runs through `tsx`.
+
+## Commands
+
+Run from the repository root. Use pnpm through corepack (`corepack enable`); the version is pinned by
+`packageManager`, Node by `.nvmrc` / `engines`.
+
+| Command            | What it does                                                               |
+| ------------------ | -------------------------------------------------------------------------- |
+| `pnpm install`     | Install dependencies (store in `./.pnpm-store`).                           |
+| `pnpm build`       | Build every package that defines a `build` script (currently the web app). |
+| `pnpm test`        | Vitest in every package (at most two workers).                             |
+| `pnpm lint`        | ESLint (flat config, `eslint.config.js`).                                  |
+| `pnpm typecheck`   | `tsc --noEmit` in every package.                                           |
+| `pnpm format`      | Prettier write; `pnpm format:check` verifies without writing.              |
+| `pnpm check`       | `pnpm lint && pnpm typecheck && pnpm test`: the local gate.                |
+| `pnpm e2e`         | Playwright E2E suite. Placeholder until the suite exists (later task).     |
+| `pnpm check:all`   | `pnpm check && pnpm e2e`.                                                  |
+
+Dev servers: `pnpm --filter @driftboard/server dev` (ws://127.0.0.1:22100) and
+`pnpm --filter @driftboard/web dev` (http://127.0.0.1:22101). Use only loopback ports 22100–22199.
+
+When Playwright is added, install its browsers into the project with `PLAYWRIGHT_BROWSERS_PATH=0`.
+
+## Conventions
+
+- Strict TypeScript everywhere (`tsconfig.base.json`: `strict`, `noUncheckedIndexedAccess`,
+  `exactOptionalPropertyTypes`, and more). Do not loosen it.
+- Prettier formatting (`.prettierrc.json`); ESLint flat config; tests with Vitest and fast-check
+  (use property tests for CRDT laws).
+- Tests are colocated as `*.test.ts(x)` next to the source.
+- Server SQLite files live under `./.data/` (git-ignored). Never write databases elsewhere.
+
+## Rule: `packages/crdt` stays pure
+
+`packages/crdt` must contain no DOM, no Node APIs, no I/O, no `Date.now()` (or any `Date`), no
+`Math.random()`, no timers, and no runtime dependencies. Clocks, replica ids and randomness are
+injected by the caller (see the `Clock` interface). Enforced by `tsconfig` (`types: []`, no DOM lib)
+and by ESLint (`no-restricted-globals`, `no-restricted-imports`, `no-restricted-properties`). Do not
+disable those rules.
+
+## Definition of done (every task)
+
+1. `pnpm check` passes (and `pnpm check:all` once E2E exists).
+2. New code has tests.
+3. Docs are updated (`DESIGN.md`, this file, README) when behaviour or commands change.
+4. Give a short summary: what changed, checks actually run, remaining limitations.
+5. Make a conventional-commit git commit (`feat:`, `fix:`, `chore:`, `docs:`, ...). Do not push.
+
+## Known state
+
+The scaffold was written in an environment with no network access, so no `pnpm install` has run:
+there is no `pnpm-lock.yaml` yet and `pnpm check` has not been executed. On the first machine with
+network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
+`pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
+`--frozen-lockfile`. Delete this section once that is done.

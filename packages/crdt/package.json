@@ -1,0 +1,19 @@
+{
+  "name": "@driftboard/crdt",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure CRDT library for driftboard: no runtime dependencies, no I/O, injected clocks.",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "fast-check": "3.23.1",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

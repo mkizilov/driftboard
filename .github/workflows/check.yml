@@ -1,0 +1,19 @@
+name: check
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version-file: .nvmrc
+          cache: pnpm
+      # No pnpm-lock.yaml exists yet (scaffolded offline); switch to --frozen-lockfile once it is committed.
+      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm check

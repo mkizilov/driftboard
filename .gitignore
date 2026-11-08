@@ -4,3 +4,12 @@
 .venv/
 _opam/
 .DS_Store
+
+node_modules/
+.pnpm-store/
+dist/
+coverage/
+*.tsbuildinfo
+.data/
+test-results/
+playwright-report/

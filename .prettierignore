@@ -1,0 +1,13 @@
+.agent-local
+.opencode
+.tools
+.toolchain
+.venv
+.data
+.pnpm-store
+node_modules
+dist
+coverage
+test-results
+playwright-report
+pnpm-lock.yaml

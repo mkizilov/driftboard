@@ -1,0 +1,38 @@
+{
+  "name": "driftboard",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Local-first collaborative sticky-note board.",
+  "type": "module",
+  "packageManager": "pnpm@9.15.9",
+  "engines": {
+    "node": ">=22.12.0 <23",
+    "pnpm": ">=9.15.9 <10"
+  },
+  "scripts": {
+    "build": "pnpm -r build",
+    "test": "pnpm -r --workspace-concurrency=2 test",
+    "lint": "eslint .",
+    "typecheck": "pnpm -r --workspace-concurrency=2 typecheck",
+    "format": "prettier --write .",
+    "format:check": "prettier --check .",
+    "e2e": "node -e \"console.log('e2e: no suites yet; Playwright arrives in a later task')\"",
+    "check": "pnpm lint && pnpm typecheck && pnpm test",
+    "check:all": "pnpm check && pnpm e2e"
+  },
+  "devDependencies": {
+    "@eslint/js": "9.17.0",
+    "eslint": "9.17.0",
+    "eslint-config-prettier": "9.1.0",
+    "eslint-plugin-react-hooks": "5.1.0",
+    "prettier": "3.4.2",
+    "typescript": "5.7.2",
+    "typescript-eslint": "8.18.2"
+  },
+  "pnpm": {
+    "onlyBuiltDependencies": [
+      "better-sqlite3",
+      "esbuild"
+    ]
+  }
+}

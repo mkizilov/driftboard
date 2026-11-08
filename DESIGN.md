@@ -984,13 +984,16 @@ The unit and component tests cover the pieces; the `e2e` package (`@driftboard/e
 whole: the real sync server, the production build of the web app and real browsers, with the claim
 the product makes, that everyone ends with the same board.
 
-- **What runs.** `pnpm e2e` runs Playwright with one worker and a Chromium project. Its `webServer`
+- **What runs.** `pnpm e2e` runs Playwright with one worker and, by default, a Chromium project
+  (`E2E_BROWSERS=chromium,webkit,firefox` chooses the engines; only Chromium is installed by
+  `pnpm e2e:install`, install the others with `playwright install`). Its `webServer`
   builds the web app into `e2e/dist/web` with `VITE_SYNC_URL` pointing at the test server, and serves
   it with `vite preview` on port 22151. A worker-scoped auto fixture, `syncServer`, starts the real
   server (`node --import tsx apps/server/src/main.ts`, so that killing the process kills the server;
   `tsx` on its own would leave a child behind) on port 22150 with an empty database under `.data/`
   and with `DRIFTBOARD_COMPACT_AFTER_OPS=50`, so that boards are folded into snapshots and a restart
-  loads from one. Both ports differ from the dev servers' (22100 to 22102).
+  loads from one. Both ports differ from the dev servers' (22100 to 22102), and `E2E_SYNC_PORT` and `E2E_WEB_PORT` move
+  them within 22100 to 22199, for instance when a process of an earlier run still holds one.
 - **People.** Fixture `openBoard('ann', 'ben', 'cat')` makes a board on the front page and opens it
   in a browser context per name (`support/person.ts`). A context has its own IndexedDB, local
   storage and connection, so it is another device; service workers are blocked so that the pages
@@ -1033,7 +1036,10 @@ the product makes, that everyone ends with the same board.
   geometry, polling, and `SyncServer` (start, stop, kill and restart on the same database, against a
   stand-in server).
 
-**Not covered.** Chromium only. The service worker and offline _page loads_ (the PWA) are not
+**Not covered.** Only Chromium and Playwright's WebKit build have run the suite (all 15 specs pass on
+both; WebKit is not Safari). Firefox could not be started in the sandbox used for development, where
+its own sandbox is refused (`sandbox_init() failed ... Operation not permitted`), so it is untested.
+The service worker and offline _page loads_ (the PWA) are not
 exercised by the suite, because it blocks service workers; offline here means a loaded page that
 loses its network. They were checked by hand against the production server (the worker registers and
 takes control, a reload and a second tab opened offline both show the board, and reconnecting goes
@@ -1097,5 +1103,5 @@ SQLite databases live in `./.data/`, and Playwright's Chromium is installed into
 `PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Loopback ports 22100–22199 are used as follows:
 22100 the sync server (development, `pnpm start:prod`, and inside the container), 22101 the Vite dev
 server, 22102 `vite preview`, 22110 to 22139 the server's WebSocket tests, 22140 its fuzz test, 22141
-to 22149 its static-file tests, 22150 and 22151 the end-to-end suite, 22160 the port `docker compose`
+to 22149 its static-file tests, 22150 and 22151 the end-to-end suite (`E2E_SYNC_PORT` and `E2E_WEB_PORT` move them within the range), 22160 the port `docker compose`
 publishes, and 22195 the unit test of `SyncServer`.

@@ -378,7 +378,7 @@ the page connects back to whatever origin it came from, including `wss`.
 
 Ports used by this repository, all on loopback: 22100 sync server (dev and production), 22101 Vite
 dev server, 22102 `vite preview`, 22110–22139 the server's WebSocket tests, 22140 its fuzz test,
-22141–22149 its static-file tests, 22150 and 22151 the end-to-end suite, 22160 the published port of
+22141–22149 its static-file tests, 22150 and 22151 the end-to-end suite (movable with `E2E_SYNC_PORT` and `E2E_WEB_PORT`), 22160 the published port of
 `docker compose`.
 
 ## How it is tested
@@ -408,8 +408,8 @@ layers; `pnpm e2e` the last.
    fake-indexeddb) and the React components on jsdom.
 6. **Static checks.** ESLint (type-aware), `tsc --noEmit` in every package, Prettier. `packages/crdt`
    additionally forbids I/O, clocks and randomness by lint rule.
-7. **End-to-end** (`e2e`, Playwright, `pnpm e2e`). Real Chromium contexts against the real server and
-   the production build: concurrent typing in one note, moving one note at once, going offline with
+7. **End-to-end** (`e2e`, Playwright, `pnpm e2e`). Real browser contexts (Chromium; add WebKit or
+   Firefox with `E2E_BROWSERS=chromium,webkit`) against the real server and the production build: concurrent typing in one note, moving one note at once, going offline with
    `context.setOffline(true)` and merging, restarting and killing the server mid-session, reloading,
    and a seeded **monkey test** of 200 random actions across three contexts. Every test ends by
    requiring identical boards in all contexts.
@@ -418,39 +418,44 @@ Benchmarks (`pnpm bench:report` for the tables, `pnpm bench` under Vitest) are s
 in `PERFORMANCE.md`: 100,000 operations applied, a board of 1,000 notes loaded, a sync after a long
 offline period.
 
-**Not covered.** Chromium only. The Docker files have not been built here (no Docker in the
-environment); their stages were reproduced as plain commands from the lockfile and the resulting
-server was driven by hand in Chromium, which is not an automated test. The service worker and the
-production server's static files are covered by unit tests and by that hand check, not by `pnpm e2e`.
-Nothing has run on a phone, on Safari or Firefox, or against a real network (latency, proxies,
-dropped connections), or with many connections at once. Presence is not asserted by the end-to-end
-suite. The GitHub workflow has never run.
+**Not covered.** Only Chromium and Playwright's WebKit build have run the end-to-end suite (WebKit
+is not Safari itself). Firefox could not be started in the sandbox used for development: its own
+sandbox is refused (`sandbox_init() failed ... Operation not permitted`), so it is untested. The
+Docker files have not been built here (no Docker in the environment); their stages were reproduced as
+plain commands from the lockfile, the Dockerfile and the compose file were checked statically, and
+the resulting server was driven by hand in Chromium, which is not an automated test. The service
+worker and the production server's static files are covered by unit tests and by that hand check,
+not by `pnpm e2e`. Nothing has run on a phone, or against a real network (latency, proxies, dropped
+connections), or with many connections at once. Presence is not asserted by the end-to-end suite.
+The GitHub workflow has never run.
 
 ## Status
 
 Four words are used here and in [ROADMAP.md](ROADMAP.md). **Verified**: implemented, and a check that
 was actually run exercised it. **Partial**: implemented, with a known gap. **Unverified**: written,
 never run. **Planned**: designed, not written. Last checked on 2026-11-08 with Node 22.12 and pnpm
-9.15.9: `pnpm check:all` exits 0 (1,295 unit, component, property, simulation and fuzz tests in six
+9.15.9: `pnpm check:all` exits 0 (1,310 unit, component, property, simulation and fuzz tests in six
 packages, ESLint, `tsc --noEmit` in every package, and 15 of 15 end-to-end specs in Chromium in
-46 s), `pnpm build` and `pnpm bench` exit 0, and Prettier is clean.
+45 s), the same 15 specs pass on WebKit, `pnpm build` and `pnpm bench` exit 0, and Prettier is clean.
+The gate also passed in a fresh clone of the committed tree (frozen lockfile, an empty store, a new
+Chromium download).
 
-| Area                                                                                     | Status            | Checked by                                                                                                                              | Not covered, or the gap                                                                                                                                     |
-| ---------------------------------------------------------------------------------------- | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| CRDT library: clocks, register, add-wins map, Fugue text, board, undo                    | Verified, partial | 369 tests; the convergence harness at 1,000 runs per type (50,000 once, for the review); mutation checks with scripts that are not kept | Open divergence cases O1 to O6 and the non-interleaving variant ([CRDT-REVIEW.md](CRDT-REVIEW.md); roadmap 3 to 5, 14). Not a proof.                        |
-| Sync protocol: `hello`, `ops`, `ack`, `presence`, version 3, binary frames               | Verified          | 176 tests, a three-client simulation, a fuzz test against `Room`                                                                        | The limits are not versioned (roadmap 5).                                                                                                                   |
-| Server: `ws`, SQLite, snapshots, rate limits, static files, `/healthz`                   | Verified, partial | 119 tests with real `ws` and better-sqlite3, including a fuzz test over sockets; the end-to-end suite; `pnpm start:prod` by hand        | The whole log of an open board is in memory, loading and compacting block the process, no heartbeat, no connection limit (roadmap 7, 8). Never load-tested. |
-| Hardening against peers: counter ranges, buffer limit, text size, rate limit, quarantine | Verified, partial | Hostile-input tests, two fuzz tests, a 23-mutant check with a script that is not kept                                                   | No authentication; the stream of a replica that is not connected can be extended; far-future timestamps are accepted (roadmap 6, 7).                        |
-| Web client: canvas, notes, text and caret, presence, undo                                | Verified, partial | 520 tests on React 18 and jsdom; the end-to-end suite in Chromium                                                                       | Chromium only; no touch design; no keyboard way to create or move a note; presence is not asserted end to end (roadmap 11, 15, 18).                         |
-| Offline-first: IndexedDB, write-behind, indicator, installable PWA                       | Verified, partial | Tests on fake-indexeddb and random three-device sessions; end-to-end offline with `setOffline`; the PWA by hand in Chromium             | The service worker is not in the automated suite (roadmap 11).                                                                                              |
-| End-to-end suite                                                                         | Verified          | 15 of 15 specs, one worker, 46 s, including a seeded monkey test of 200 actions                                                         | Chromium only; one seed by default.                                                                                                                         |
-| Production serving, `pnpm start:prod`                                                    | Verified          | Static-file tests including path traversal; run and driven in Chromium                                                                  | Runs through `tsx` (roadmap 13); no compression or TLS, use a reverse proxy.                                                                                |
-| `Dockerfile`, `docker-compose.yml`                                                       | Unverified        | Stages reproduced as plain commands from the lockfile                                                                                   | Never built or run (roadmap 1).                                                                                                                             |
-| GitHub workflow `check.yml`                                                              | Unverified        | none                                                                                                                                    | Never ran (roadmap 1).                                                                                                                                      |
-| Performance work: tree index, binary encoding                                            | Verified          | `bench:report` before and after; `pnpm bench` passes                                                                                    | Loading a board and syncing barely moved; one machine; Vitest's spread is wide.                                                                             |
-| Dependency security                                                                      | Partial           | `pnpm audit`; `ws` brought to a patched version                                                                                         | `zod` 3 (high) and `esbuild` through `tsx` in production; critical and high in development tools (roadmap 2).                                               |
-| Collecting tombstones, compacting version vectors, truncating the log                    | Planned           | none                                                                                                                                    | Design in `PERFORMANCE.md` (roadmap 17).                                                                                                                    |
-| Accounts and encryption                                                                  | Planned           | none                                                                                                                                    | Only the link protects a board (roadmap 20).                                                                                                                |
+| Area                                                                                     | Status            | Checked by                                                                                                                                                           | Not covered, or the gap                                                                                                                                     |
+| ---------------------------------------------------------------------------------------- | ----------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| CRDT library: clocks, register, add-wins map, Fugue text, board, undo                    | Verified, partial | 369 tests; the convergence harness at 1,000 runs per type (50,000 once, for the review); mutation checks with scripts that are not kept                              | Open divergence cases O1 to O6 and the non-interleaving variant ([CRDT-REVIEW.md](CRDT-REVIEW.md); roadmap 3 to 5, 14). Not a proof.                        |
+| Sync protocol: `hello`, `ops`, `ack`, `presence`, version 3, binary frames               | Verified          | 176 tests, a three-client simulation, a fuzz test against `Room`                                                                                                     | The limits are not versioned (roadmap 5).                                                                                                                   |
+| Server: `ws`, SQLite, snapshots, rate limits, static files, `/healthz`                   | Verified, partial | 119 tests with real `ws` and better-sqlite3, including a fuzz test over sockets; the end-to-end suite; `pnpm start:prod` by hand                                     | The whole log of an open board is in memory, loading and compacting block the process, no heartbeat, no connection limit (roadmap 7, 8). Never load-tested. |
+| Hardening against peers: counter ranges, buffer limit, text size, rate limit, quarantine | Verified, partial | Hostile-input tests, two fuzz tests, a 23-mutant check with a script that is not kept                                                                                | No authentication; the stream of a replica that is not connected can be extended; far-future timestamps are accepted (roadmap 6, 7).                        |
+| Web client: canvas, notes, text and caret, presence, undo                                | Verified, partial | 520 tests on React 18 and jsdom; the end-to-end suite in Chromium and WebKit                                                                                         | Firefox untested; no touch design; no keyboard way to create or move a note; presence is not asserted end to end (roadmap 11, 15, 18).                      |
+| Offline-first: IndexedDB, write-behind, indicator, installable PWA                       | Verified, partial | Tests on fake-indexeddb and random three-device sessions; end-to-end offline with `setOffline`; the PWA by hand in Chromium                                          | The service worker is not in the automated suite (roadmap 11).                                                                                              |
+| End-to-end suite                                                                         | Verified          | 15 of 15 specs on Chromium (45 s) and on WebKit (51 s), one worker, including a seeded monkey test of 200 actions; `E2E_BROWSERS=chromium,webkit pnpm e2e` runs both | Firefox did not start in the sandbox; WebKit is Playwright's build, not Safari; one seed by default.                                                        |
+| Production serving, `pnpm start:prod`                                                    | Verified          | Static-file tests including path traversal; run and driven in Chromium                                                                                               | Runs through `tsx` (roadmap 13); no compression or TLS, use a reverse proxy.                                                                                |
+| `Dockerfile`, `docker-compose.yml`                                                       | Unverified        | Stages reproduced as plain commands from the lockfile; the Dockerfile parses and the compose file validates against the compose-spec (static checks only)            | Never built or run (roadmap 1).                                                                                                                             |
+| GitHub workflow `check.yml`                                                              | Unverified        | none                                                                                                                                                                 | Never ran (roadmap 1).                                                                                                                                      |
+| Performance work: tree index, binary encoding                                            | Verified          | `bench:report` before and after; `pnpm bench` passes                                                                                                                 | Loading a board and syncing barely moved; one machine; Vitest's spread is wide.                                                                             |
+| Dependency security                                                                      | Partial           | `pnpm audit`; `ws` brought to a patched version                                                                                                                      | `zod` 3 (high) and `esbuild` through `tsx` in production; critical and high in development tools (roadmap 2).                                               |
+| Collecting tombstones, compacting version vectors, truncating the log                    | Planned           | none                                                                                                                                                                 | Design in `PERFORMANCE.md` (roadmap 17).                                                                                                                    |
+| Accounts and encryption                                                                  | Planned           | none                                                                                                                                                                 | Only the link protects a board (roadmap 20).                                                                                                                |
 
 ## Known limitations
 

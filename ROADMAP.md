@@ -15,38 +15,40 @@ today; this file says what to do about the gaps.
    from the docs.
 3. "Original requirements": the prompts of the first eleven pieces of work were not available when
    this was written, so this means the features `DESIGN.md` and the commit history describe. All of
-   them are implemented. The ones that lack a real check are the container and CI (step 1) and the
-   browsers other than Chromium, the service worker and presence in the end-to-end suite (step 11).
+   them are implemented. The ones that lack a real check are the container and CI (step 1) and
+   Firefox, the service worker and presence in the end-to-end suite (step 11).
    `DESIGN.md` marks four things as planned: compaction of the version vector, freeing the text of
    deleted notes, truncating the log, and Fugue's non-interleaving variant. They are steps 17 and 14.
 
-Fixed during this review, so not on the list: `ws` was 8.18.0, which has a high-severity memory
+Fixed during the reviews, so not on the list: `ws` was 8.18.0, which has a high-severity memory
 exhaustion advisory and a moderate one; it is 8.22.2 now. `pnpm bench` failed on its first run (the
-sync scenario ran out of prepared worlds); it passes now.
+sync scenario ran out of prepared worlds); it passes now. The end-to-end suite can run on other engines
+and ports (`E2E_BROWSERS`, `E2E_SYNC_PORT`, `E2E_WEB_PORT`), and all 15 specs pass on WebKit as well
+as on Chromium.
 
-| #   | Step                                                       | Tier                 |   Hours |
-| --- | ---------------------------------------------------------- | -------------------- | ------: |
-| 1   | Build and run the container and the CI workflow for real   | never ran            |       5 |
-| 2   | Clear the dependency advisories                            | never ran / security |      10 |
-| 3   | A replica past the note limit while offline can never sync | correctness          |      10 |
-| 4   | Send operations in causal order                            | correctness          |      12 |
-| 5   | Version the limits; retry quarantined operations           | correctness          |       7 |
-| 6   | Protect the streams of replicas that are not connected     | security             |      12 |
-| 7   | Bound clocks, detect dead connections, limit connections   | security             |       8 |
-| 8   | Server memory and event loop at scale                      | correctness / scale  |      16 |
-| 9   | Measure coverage; make the mutation tests reproducible     | verification         |      10 |
-| 10  | Deeper verification of the CRDTs                           | verification         |      16 |
-| 11  | Other browsers, touch, the service worker and presence     | verification         |      14 |
-| 12  | Real-network and load tests                                | verification         |      12 |
-| 13  | Run the server from compiled JavaScript                    | deployment           |       6 |
-| 14  | Maximally non-interleaving text                            | quality              |      14 |
-| 15  | Accessibility and keyboard operation                       | quality              |      14 |
-| 16  | Backups, logs and metrics                                  | operations           |       8 |
-| 17  | Compact history: runs of characters, then safe collection  | capability           |      56 |
-| 18  | Presence in depth                                          | capability           |      10 |
-| 19  | Board management: list, export, import, delete             | capability           |      12 |
-| 20  | Access control                                             | capability           |      24 |
-|     | **Total**                                                  |                      | **276** |
+| #   | Step                                                         | Tier                 |   Hours |
+| --- | ------------------------------------------------------------ | -------------------- | ------: |
+| 1   | Build and run the container and the CI workflow for real     | never ran            |       5 |
+| 2   | Clear the dependency advisories                              | never ran / security |      10 |
+| 3   | A replica past the note limit while offline can never sync   | correctness          |      10 |
+| 4   | Send operations in causal order                              | correctness          |      12 |
+| 5   | Version the limits; retry quarantined operations             | correctness          |       7 |
+| 6   | Protect the streams of replicas that are not connected       | security             |      12 |
+| 7   | Bound clocks, detect dead connections, limit connections     | security             |       8 |
+| 8   | Server memory and event loop at scale                        | correctness / scale  |      16 |
+| 9   | Measure coverage; make the mutation tests reproducible       | verification         |      10 |
+| 10  | Deeper verification of the CRDTs                             | verification         |      16 |
+| 11  | Firefox, touch, the service worker and presence              | verification         |      12 |
+| 12  | Real-network and load tests                                  | verification         |      12 |
+| 13  | Run the server from compiled JavaScript; third-party notices | deployment           |       8 |
+| 14  | Maximally non-interleaving text                              | quality              |      14 |
+| 15  | Accessibility and keyboard operation                         | quality              |      14 |
+| 16  | Backups, logs and metrics                                    | operations           |       8 |
+| 17  | Compact history: runs of characters, then safe collection    | capability           |      56 |
+| 18  | Presence in depth                                            | capability           |      10 |
+| 19  | Board management: list, export, import, delete               | capability           |      12 |
+| 20  | Access control                                               | capability           |      24 |
+|     | **Total**                                                    |                      | **276** |
 
 ## 1. Build and run the container and the CI workflow for real
 
@@ -55,8 +57,10 @@ sync scenario ran out of prepared worlds); it passes now.
   health check, and the compose options (`read_only`, `cap_drop`, `user`, the bind mount). Run
   `.github/workflows/check.yml` (both jobs, `check` and `image`) on GitHub for the first time.
 - **Why.** The container and the workflow are deliverables that have never executed: Docker could not
-  be operated here and the repository has not been published. The scratch reproduction of the stages
-  covered the dependency set and the layout of the runtime image, not the files themselves.
+  be operated here and the repository has not been published. A scratch reproduction of the stages
+  covered the dependency set and the layout of the runtime image, and a static check on 2026-11-08
+  (the Dockerfile parses with `dockerfile-utils` and the compose file validates against the
+  compose-spec schema) covered the syntax of the files. None of it built an image.
 - **Depends on.** A Docker host and a GitHub repository with Actions.
 - **Done when.**
   - `docker build` and `docker compose up --build` succeed from a clean clone;
@@ -250,22 +254,26 @@ sync scenario ran out of prepared worlds); it passes now.
     what is still not covered.
 - **Effort.** 16 hours.
 
-## 11. Other browsers, touch, the service worker and presence
+## 11. Firefox, touch, the service worker and presence
 
-- **Scope.** Add Firefox and WebKit projects to the Playwright configuration (browsers installed into
-  the project) and run the same 15 specs; add a mobile-emulated project with touch events for dragging
-  notes, panning and pinching; add a spec project with service workers allowed for the offline page
-  load and the update banner; assert presence (cursors, the people list, who is editing); run the
-  monkey test with several seeds in CI (`E2E_MONKEY_RUNS`).
-- **Why.** The suite runs in Chromium only, blocks the service worker (so that "offline" means the
-  network alone), and does not assert presence. The offline page load was checked by hand with a
-  throwaway script that is not in the repository, and nothing has run on a touch device.
-- **Depends on.** Downloads of the browsers; step 1 for the CI matrix.
+- **Scope.** Run the suite on Firefox on a machine where it starts, and fix what it shows. (It does not
+  start under the macOS sandbox used for development here: `sandbox_init() failed with error
+"Operation not permitted"`, and switching off its own sandboxes did not help.) Add a mobile-emulated
+  project with touch events for dragging notes, panning and pinching; add a spec project with service
+  workers allowed for the offline page load and the update banner; assert presence (cursors, the
+  people list, who is editing); run the monkey test with several seeds in CI (`E2E_MONKEY_RUNS`); and
+  put Chromium and WebKit (`E2E_BROWSERS=chromium,webkit`) in the CI matrix.
+- **Why.** The 15 specs pass on Chromium and on Playwright's WebKit build (30 passed with
+  `E2E_BROWSERS=chromium,webkit pnpm e2e` on 2026-11-08), but Firefox has never run, WebKit is not
+  Safari, the suite blocks the service worker (so that "offline" means the network alone) and it does
+  not assert presence. The offline page load was checked by hand with a throwaway script that is not
+  in the repository, and nothing has run on a touch device.
+- **Depends on.** A machine where Firefox can start; step 1 for the CI matrix.
 - **Done when.**
-  - the specs pass on three engines, or each failure is a recorded finding that is fixed;
+  - the specs pass on Firefox as well, or each failure is a recorded finding that is fixed;
   - the touch, service worker and presence specs exist and pass;
   - the by-hand PWA check is replaced by a spec, and the "unverified" notes shrink to match.
-- **Effort.** 14 hours.
+- **Effort.** 12 hours.
 
 ## 12. Real-network and load tests
 
@@ -282,20 +290,27 @@ sync scenario ran out of prepared worlds); it passes now.
     reported 99th percentile of broadcast latency; anything that fails is a filed finding.
 - **Effort.** 12 hours.
 
-## 13. Run the server from compiled JavaScript
+## 13. Run the server from compiled JavaScript, and ship third-party notices
 
 - **Scope.** Build the server and the workspace packages it uses (`tsc` or an esbuild bundle), and have
   `start:prod`, the `Dockerfile` and the end-to-end fixture run `node dist/main.js`. Keep `tsx` for
-  development only.
+  development only. In the same pass, make the web build emit a third-party notices file for the
+  packages it bundles (React and its scheduler, `idb`, `zod`, `workbox-window`) and copy it into the
+  image.
 - **Why.** `tsx` is a production dependency only because the workspace packages are TypeScript read from
   source. It costs start-up time, needs a writable cache (the reason compose mounts `/tmp` as a
-  tmpfs), and brings `esbuild` and its advisory into the image.
+  tmpfs), and brings `esbuild` and its advisory into the image. And the minified web bundle keeps
+  React's license comments but not the notices of `idb` (ISC), `zod` and `workbox-window` (MIT), which
+  those licenses ask to be kept in copies. The source repository is unaffected; a published bundle or
+  image is not.
 - **Depends on.** Step 1 (to verify the image) and step 2.
 - **Done when.**
   - `pnpm build` emits the server; the image has no `tsx` or `esbuild`;
   - the server tests, a smoke run of the built output, and `pnpm e2e` pass against the build;
-  - image size and cold start time are reported before and after; compose no longer needs the tmpfs.
-- **Effort.** 6 hours.
+  - image size and cold start time are reported before and after; compose no longer needs the tmpfs;
+  - the built web app contains a notices file with the license text of every bundled package, and a
+    test fails when a new bundled dependency is missing from it.
+- **Effort.** 8 hours.
 
 ## 14. Maximally non-interleaving text
 

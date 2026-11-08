@@ -22,7 +22,7 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
-| `packages/crdt`     | Pure CRDT library (HLC, LWW register, add-wins map, RGA text). No runtime deps. |
+| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors. Planned: LWW register, add-wins map, RGA text. No runtime deps. |
 | `packages/protocol` | Sync message types validated with zod.                                     |
 | `apps/server`       | Node 22 sync server: `ws` + `better-sqlite3`; databases in `./.data/`.     |
 | `apps/web`          | React 18 + Vite client.                                                    |
@@ -79,8 +79,10 @@ disable those rules.
 
 ## Known state
 
-The scaffold was written in an environment with no network access, so no `pnpm install` has run:
-there is no `pnpm-lock.yaml` yet and `pnpm check` has not been executed. On the first machine with
+The scaffold (and the turn-2 clocks/IDs code) was written in an environment with no network access,
+so no `pnpm install` has run: there is no `pnpm-lock.yaml` yet and `pnpm check` has not been
+executed. Turn 2 logic was only smoke-tested with Node's built-in type stripping, not with
+Vitest/fast-check/tsc/ESLint. On the first machine with
 network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
 `pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
 `--frozen-lockfile`. Delete this section once that is done.

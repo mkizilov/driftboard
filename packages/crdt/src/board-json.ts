@@ -7,6 +7,7 @@ import {
   type NoteFields,
 } from './board-ops';
 import { formatHlc, parseHlc } from './hlc';
+import { MAX_OP_REFS } from './limits';
 import { LwwRegister } from './lww-register';
 import { opIdKey, parseOpIdKey, type OpId } from './op-id';
 import type { TextSide } from './text-sequence';
@@ -100,6 +101,15 @@ function opIdFrom(value: unknown, what: string): OpId {
   return parseOpIdKey(asString(value, what));
 }
 
+/** A list of operation ids, refused before it is read if it is longer than any honest one. */
+function opIdsFrom(value: unknown, what: string): OpId[] {
+  const list = asArray(value, what);
+  if (list.length > MAX_OP_REFS) {
+    throw new BoardFormatError(`${what} holds more than ${MAX_OP_REFS} ids`);
+  }
+  return list.map((id) => opIdFrom(id, what));
+}
+
 function registerFrom<T extends number | string>(value: unknown, what: string): LwwRegister<T> {
   const entry = asObject(value, what);
   const register = LwwRegister.empty<T>();
@@ -129,15 +139,13 @@ function opFromObject(json: Record<string, unknown>): BoardOp {
         type: 'put',
         key: noteId,
         dot: opIdFrom(json['dot'], 'dot'),
-        supersedes: asArray(json['supersedes'], 'supersedes').map((id) =>
-          opIdFrom(id, 'supersedes'),
-        ),
+        supersedes: opIdsFrom(json['supersedes'], 'supersedes'),
         value: fieldsFrom(json['fields']),
       };
       return { type: 'notes', op };
     }
     case 'note-remove': {
-      const dots = asArray(json['dots'], 'dots').map((id) => opIdFrom(id, 'dots'));
+      const dots = opIdsFrom(json['dots'], 'dots');
       return { type: 'notes', op: { type: 'remove', key: noteId, dots } };
     }
     case 'text-insert': {

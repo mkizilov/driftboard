@@ -14,8 +14,7 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      # No pnpm-lock.yaml exists yet (scaffolded offline); switch to --frozen-lockfile once it is committed.
-      - run: pnpm install --no-frozen-lockfile
+      - run: pnpm install --frozen-lockfile
       - run: pnpm check
       - name: Install the browser for the end-to-end tests
         run: pnpm --filter @driftboard/e2e exec playwright install --with-deps chromium

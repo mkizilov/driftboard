@@ -52,6 +52,13 @@ that all contexts show identical boards. `E2E_SEED=n pnpm e2e` repeats a monkey 
 `E2E_MONKEY_RUNS=n pnpm e2e` makes n runs on consecutive seeds. A failed test keeps a Playwright
 trace per person in `e2e/test-results/`.
 
+Misbehaving peers: the server closes a connection that sends too much (per-connection rate limits,
+`DRIFTBOARD_RATE_*`), forges ids, writes in the name of a replica that is connected or pushes one off
+the board, or grows a note's text past 100,000 characters (`DRIFTBOARD_MAX_NOTE_NODES`); a client sets
+aside operations it cannot apply instead of failing, and honest replicas keep converging whatever a
+peer sends. Two fuzz tests (`fast-check`) throw random and mutated messages at a room and at a running
+server. What this does and does not protect against is in "Security and robustness" in `DESIGN.md`.
+
 Performance: `PERFORMANCE.md` has the numbers before and after the work on the text sequence and the
 binary encoding of operations (100,000 local edits: 264 s to 76 ms; a sync of 120,000 operations: 17.6
 MB to 437 KB), and what it would take to garbage-collect tombstones. `pnpm bench:report` reproduces

@@ -267,15 +267,44 @@ can be a tombstone, so replicas that did see the delete go on writing operations
 
 ## Not measured, and limits
 
-- No browser, no real WebSocket, no better-sqlite3, no zod and no React ran in these measurements
-  (none is installed here). The server's `ws` adapter (`server.ts`), the web `browserSocket` binary
-  handling and the Playwright suite remain unrun; the hub, the protocol and the web sync logic are
-  exercised against fakes. The real zod check of text messages adds its own cost to JSON frames and
-  is not in any timing above.
-- One run per scenario on one machine (two for the full report), Node 26 and not the pinned Node 22.
-  Numbers are for comparison between the two columns, not forecasts.
+- The tables above were made without a browser, a real WebSocket, better-sqlite3, zod or React (none
+  was installed then), on Node 26 and not the pinned Node 22. After the security work (turn 14), when
+  the real packages were installed, `pnpm bench:report` was run again on Node 22.12 (see "After the
+  security work" below); the server's `ws` adapter and the hub are exercised by the server's tests
+  with real sockets, but the Playwright suite and the web `browserSocket` in a real browser remain
+  unrun.
+- One run per scenario on one machine (two for the full report). Numbers are for comparison between
+  the two columns, not forecasts.
 - The sync scenario is in one process: it measures the work of the protocol and the boards, not
   latency or a real network.
 - Memory per node was measured on two texts only. Per-note counts on real boards are unknown.
 - `vitest bench` itself has not been run; the `*.bench.ts` files are unverified beyond their
   imports being the same functions the report calls.
+
+## After the security work
+
+Turn 14 made `storeAdd` parse the ids of every new operation (to hold each origin's stream to its
+numbering, see "Security and robustness" in `DESIGN.md`), made `Room` count the characters of every
+note when it is created and as operations arrive, and made the board count what it holds back. To see
+what that costs, `pnpm bench:report` was run again, once, on the pinned Node 22.12 with the real
+packages installed. It is not an A/B on one runtime (the first run was Node 26.13), so differences of
+about 15% are within what the two runtimes and a single run can explain.
+
+| scenario                                                    | turn 13 (Node 26) | turn 14 (Node 22.12) |
+| ----------------------------------------------------------- | ----------------: | -------------------: |
+| 100,000 local text edits                                    |             76 ms |                74 ms |
+| apply 100,000 operations on a fresh replica (in order)      |             75 ms |                65 ms |
+| load a board of 842,485 operations, JSON, in all            |           1847 ms |              1956 ms |
+| load the same board, binary, in all                         |           1507 ms |              1517 ms |
+| sync after a long offline period (120,009 ops), JSON wire   |            314 ms |               319 ms |
+| sync after a long offline period (120,009 ops), binary wire |            311 ms |               354 ms |
+
+Loading a board goes through `Board.applyRemote`, which these changes did not touch, and does not
+call `storeAdd`. The sync scenario does, on both sides, for all 120,009 operations; the binary column
+is the one that moved most (about 40 ms), which is the cost of the id checks, if it is not noise.
+
+The server pays for the same checks when it opens a board. Measured separately, on the board of
+842,485 operations (3 rounds, Node 22.12): `storeAdd` over the whole log 85 to 95 ms, the scan that
+builds the per-note ledger 8 to 10 ms, `createRoom` (which includes that scan) 8 to 11 ms. That is
+about a tenth of a second on top of reading the board from the database, once per board per time
+its first client arrives.

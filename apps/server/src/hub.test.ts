@@ -10,6 +10,7 @@ import {
   openInitiator,
   parseFrame,
   receive,
+  stampOps,
   storeSize,
   storeVector,
   type Frame,
@@ -22,6 +23,7 @@ import type Database from 'better-sqlite3';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import { IN_MEMORY, openDatabase } from './db';
 import { CLOSE, SyncHub, type HubConnection, type HubOptions, type HubSocket } from './hub';
+import { DEFAULT_RATE_LIMITS, type RateLimits } from './rate-limit';
 import { BoardStorage } from './storage';
 import { must, sleep, stamped } from './test-support';
 
@@ -650,6 +652,218 @@ describe('when storage fails', () => {
     const peer = connected(hub, b);
     expect(peer.socket.closed?.code).toBe(CLOSE.internalError);
     expect(hub.roomCount).toBe(0);
+    expect(hub.connectionCount).toBe(0);
+  });
+});
+
+describe('a connection that misbehaves', () => {
+  function expectClosed(peer: Peer, code: string, closeCode: number = CLOSE.policyViolation): void {
+    expect(peer.socket.lastError()).toMatchObject({ type: 'error', code });
+    expect(peer.socket.closed?.code).toBe(closeCode);
+  }
+
+  /** A hub whose clock the test moves, with the rate limits it asks for. */
+  function limited(rateLimits: RateLimits, maxNoteNodes?: number) {
+    const clock = { now: 0 };
+    const hub = newHub({
+      rateLimits,
+      now: () => clock.now,
+      ...(maxNoteNodes === undefined ? {} : { maxNoteNodes }),
+    });
+    return { hub, clock };
+  }
+  const off = { burst: 0, perSecond: 1 };
+  const ack: Message = { type: 'ack', versionVector: [] };
+
+  it('is closed with rate_limited once it has sent more messages than its burst', () => {
+    const { hub } = limited({ messages: { burst: 5, perSecond: 1 }, ops: off });
+    const flood = connected(hub, a); // the hello was the first message
+    const honest = connected(hub, b);
+    settle(flood, honest);
+    for (let sent = 0; sent < 4; sent += 1) flood.say(ack);
+    expect(flood.socket.closed).toBeNull();
+    flood.say(ack);
+    expectClosed(flood, 'rate_limited');
+    expect(hub.connectionCount).toBe(1);
+
+    // The honest connection next to it is not affected, and still syncs.
+    honest.author(2);
+    settle(honest);
+    expect(honest.socket.closed).toBeNull();
+    expect(storage.tailSize(BOARD)).toBe(2);
+  });
+
+  it('may send again as its tokens come back', () => {
+    const { hub, clock } = limited({ messages: { burst: 3, perSecond: 2 }, ops: off });
+    const peer = connected(hub, a);
+    peer.say(ack);
+    peer.say(ack);
+    clock.now += 1000; // two tokens back
+    peer.say(ack);
+    peer.say(ack);
+    expect(peer.socket.closed).toBeNull();
+    peer.say(ack);
+    expectClosed(peer, 'rate_limited');
+  });
+
+  it('is never refilled above its burst, however long it was quiet', () => {
+    const { hub, clock } = limited({ messages: { burst: 3, perSecond: 100 }, ops: off });
+    const peer = connected(hub, a);
+    clock.now += 3_600_000;
+    peer.say(ack);
+    peer.say(ack);
+    peer.say(ack);
+    expect(peer.socket.closed).toBeNull();
+    peer.say(ack);
+    expectClosed(peer, 'rate_limited');
+  });
+
+  it('is closed once it has sent more operations than its burst, whatever their size', () => {
+    const { hub } = limited({ messages: off, ops: { burst: 10, perSecond: 1 } });
+    const peer = connected(hub, a);
+    settle(peer);
+    peer.author(10);
+    settle(peer);
+    expect(peer.socket.closed).toBeNull();
+    expect(storage.tailSize(BOARD)).toBe(10);
+    peer.author(1);
+    expectClosed(peer, 'rate_limited');
+    expect(storage.tailSize(BOARD)).toBe(10);
+  });
+
+  it('pays for a message by the operations in it, before any is stored', () => {
+    const { hub } = limited({ messages: off, ops: { burst: 100, perSecond: 1 } });
+    const peer = connected(hub, a);
+    settle(peer);
+    peer.say({ type: 'ops', ops: stamped(a, 1, 101) });
+    expectClosed(peer, 'rate_limited');
+    expect(count('ops')).toBe(0);
+  });
+
+  it('is not limited at all when the limits are off', () => {
+    const { hub } = limited({ messages: off, ops: off });
+    const peer = connected(hub, a);
+    for (let sent = 0; sent < 3000; sent += 1) peer.say(ack);
+    expect(peer.socket.closed).toBeNull();
+  });
+
+  it('leaves an honest burst alone with the default limits: a long time offline', () => {
+    const hub = newHub({ rateLimits: DEFAULT_RATE_LIMITS });
+    const peer = connected(hub, a);
+    settle(peer);
+    // 2,000 operations made offline, sent at once as four messages of 500. Part of them end up in
+    // a snapshot by now, so count what the board holds.
+    peer.author(2000);
+    expect(peer.socket.closed).toBeNull();
+    expect(storeSize(storage.load(BOARD).store)).toBe(2000);
+  });
+
+  it('cannot write as a replica that is connected, and is closed for trying', () => {
+    const hub = newHub();
+    const forger = connected(hub, b);
+    const honest = connected(hub, a);
+    settle(forger, honest);
+    forger.say({ type: 'ops', ops: stamped(a, 1, 1) });
+    expectClosed(forger, 'invalid_message');
+    expect(count('ops')).toBe(0);
+    expect(honest.socket.closed).toBeNull();
+  });
+
+  it('cannot push a replica off the board by saying its id, but it can come back with its secret', () => {
+    const hub = newHub();
+    const hello = (token?: string): Message => ({
+      type: 'hello',
+      version: PROTOCOL_VERSION,
+      replicaId: a,
+      boardId: BOARD,
+      versionVector: [],
+      ...(token === undefined ? {} : { token }),
+    });
+    const owner = new Peer(hub, a, BOARD);
+    owner.say(hello('the-owners-secret'));
+    settle(owner);
+    expect(owner.socket.types()[0]).toBe('hello');
+
+    for (const token of [undefined, 'a-guess-of-it']) {
+      const intruder = new Peer(hub, a, BOARD);
+      intruder.say(hello(token));
+      expectClosed(intruder, 'invalid_message');
+    }
+    expect(owner.socket.closed).toBeNull();
+    expect(hub.connectionCount).toBe(1);
+
+    const back = new Peer(hub, a, BOARD);
+    back.say(hello('the-owners-secret'));
+    settle(back);
+    expect(owner.socket.closed?.code).toBe(CLOSE.replaced);
+    expect(back.socket.closed).toBeNull();
+    expect(hub.connectionCount).toBe(1);
+  });
+
+  it('may send what an earlier page load made, as another replica, once that one is gone', () => {
+    const hub = newHub();
+    const reader = connected(hub, c);
+    const later = connected(hub, b);
+    settle(reader, later);
+    // Replica a made these before it went away; this page load is replica b.
+    later.say({ type: 'ops', ops: stamped(a, 1, 2) });
+    settle(reader, later);
+    expect(later.socket.closed).toBeNull();
+    expect(labels(reader.applied)).toEqual(['a1', 'a2']);
+  });
+
+  it('cannot use another replica’s ids in its own operations', () => {
+    const hub = newHub();
+    const forger = connected(hub, b);
+    settle(forger);
+    const { ops } = new Board({ replicaId: a, clock: createManualClock(1000) }).createNote();
+    // Replica a's note put, stamped as the forger's own first operation.
+    forger.say({ type: 'ops', ops: stampOps(b, 1, ops) });
+    expectClosed(forger, 'invalid_message');
+    expect(count('ops')).toBe(0);
+  });
+
+  it('cannot make a note’s text longer than the limit, and the others are not told of it', () => {
+    const { hub } = limited(DEFAULT_RATE_LIMITS, 3);
+    const writer = connected(hub, a);
+    const reader = connected(hub, b);
+    settle(writer, reader);
+    const board = new Board({ replicaId: a, clock: createManualClock(1000) });
+    const fits = board.createNote({ text: 'abc' });
+    writer.say({ type: 'ops', ops: stampOps(a, 1, fits.ops) });
+    settle(writer, reader);
+    expect(writer.socket.closed).toBeNull();
+    expect(reader.applied).toHaveLength(fits.ops.length);
+
+    const tooLong = board.editText(fits.id, 3, 0, 'd');
+    writer.say({ type: 'ops', ops: stampOps(a, fits.ops.length + 1, tooLong) });
+    expectClosed(writer, 'invalid_message');
+    settle(reader);
+    expect(reader.applied).toHaveLength(fits.ops.length);
+    expect(reader.socket.closed).toBeNull();
+    expect(storage.tailSize(BOARD)).toBe(fits.ops.length);
+  });
+
+  it('may send text before the write that makes its note, as a device sends in replica id order', () => {
+    const hub = newHub();
+    const peer = connected(hub, a);
+    settle(peer);
+    const { ops } = new Board({ replicaId: a, clock: createManualClock(1000) }).createNote({
+      text: 'x',
+    });
+    // Only the character, as the first operation of its stream: the write comes later.
+    peer.say({ type: 'ops', ops: stampOps(a, 1, ops.slice(1)) });
+    expect(peer.socket.closed).toBeNull();
+    expect(count('ops')).toBe(1);
+  });
+
+  it('does not take the hub down with a frame that makes the parser throw', () => {
+    const hub = newHub();
+    const peer = new Peer(hub, a, BOARD);
+    const bytes = new Uint8Array(2000);
+    bytes[0] = 0xdb; // the first byte of a binary batch, then zeros
+    expect(() => peer.conn.receive(bytes, true)).not.toThrow();
+    expect(peer.socket.closed).not.toBeNull();
     expect(hub.connectionCount).toBe(0);
   });
 });

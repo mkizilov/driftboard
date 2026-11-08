@@ -1,4 +1,4 @@
-import { VersionVector } from '@driftboard/crdt';
+import { Board, VersionVector, createManualClock, replicaId } from '@driftboard/crdt';
 import {
   PROTOCOL_VERSION,
   parseFrame,
@@ -103,6 +103,31 @@ describe('SyncConnection: connecting', () => {
       boardId: net.boardId,
       versionVector: [],
     });
+  });
+
+  it('puts its secret in the hello, if it has one, and only there', () => {
+    const { net, client, latest } = setup();
+    const a = client(1, { secret: 'a-secret-for-a' });
+    a.connection.start();
+    net.open(latest());
+    const hello = parseFrame(must(latest().sent[0]));
+    expect(hello.ok ? hello.message : undefined).toMatchObject({
+      type: 'hello',
+      token: 'a-secret-for-a',
+    });
+    const b = client(2);
+    b.connection.start();
+    net.open(latest());
+    const plain = parseFrame(must(latest().sent[0]));
+    expect(
+      plain.ok && plain.message.type === 'hello' ? plain.message : undefined,
+    ).not.toHaveProperty('token');
+    // Nothing the server relays to the others carries it.
+    for (const socket of net.sockets) {
+      for (const frame of socket.received) {
+        expect(typeof frame === 'string' ? frame : '').not.toContain('a-secret-for-a');
+      }
+    }
   });
 
   it('is not online, and sends nothing, until the server has answered the hello', () => {
@@ -940,5 +965,94 @@ describe('SyncConnection: presence', () => {
     harness.online(b);
     expect(() => b.connection.sendPresence(here('B'))).not.toThrow();
     expect(a.connection.getStatus()).toBe('online');
+  });
+});
+
+describe('SyncConnection: a server that sends what it should not', () => {
+  it('sets aside operations the board cannot take and stays online', () => {
+    const { net, timers, client, online } = setup();
+    // A board that holds at most three characters per note, next to one that types five.
+    const small = new Board({
+      replicaId: replicaId('small'),
+      clock: createManualClock(1000),
+      maxNoteNodes: 3,
+    });
+    const victim = new SyncConnection({
+      boardId: net.boardId,
+      replicaId: small.replicaId,
+      url: 'ws://test.invalid/ws',
+      board: small,
+      createSocket: net.createSocket,
+      timers,
+      random: () => 0,
+    });
+    victim.start();
+    net.open(must(net.sockets.at(-1)));
+    expect(victim.getStatus()).toBe('online');
+
+    const writer = client(2);
+    online(writer);
+    const id = must(writer.store.createNote(1, 1));
+    writer.store.editText(id, { start: 0, deleteCount: 0, insert: 'abcde' });
+
+    expect(victim.getStatus()).toBe('online');
+    expect(small.getNote(id)?.text).toBe('abc');
+    expect(victim.quarantinedCount).toBe(2);
+    expect(small.quarantinedCount).toBe(2);
+    expect(victim.lastError).toBeNull();
+  });
+
+  it('closes the connection on operations that break the rules of their origin, and applies none', () => {
+    const { net, client, online } = setup();
+    const a = client(1);
+    const socket = online(a);
+    const [put, ...rest] = operations(3);
+    const forged = { ...must(put), op: { ...must(put).op, dot: '1@someone-else' } };
+    net.injectMessage(socket, { type: 'ops', ops: [forged, ...rest] });
+    expect(a.connection.lastError).toContain('closed after a protocol error');
+    expect(a.board.size).toBe(0);
+    expect(a.connection.getStatus()).toBe('offline');
+  });
+
+  it('does not let an error in the app’s own callbacks escape from the socket handler', () => {
+    const { net, client, online } = setup();
+    const a = client(1, {
+      onStored: () => {
+        throw new Error('the disk is on fire');
+      },
+    });
+    const socket = online(a);
+    const b = client(2);
+    online(b);
+    expect(() => {
+      b.store.createNote(1, 1);
+    }).not.toThrow();
+    expect(a.connection.lastError).toContain('the disk is on fire');
+    expect(a.connection.getStatus()).toBe('offline');
+    expect(socket.closed).toBe(true);
+    expect(net.sockets.length).toBeGreaterThan(0);
+  });
+
+  it('survives garbage of every kind between good messages', () => {
+    const { net, client, online } = setup();
+    const a = client(1);
+    const b = client(2);
+    const socketA = online(a);
+    online(b);
+    for (const garbage of [
+      '',
+      'null',
+      '{"type":"ops","ops":"x"}',
+      '{"type":"ops","ops":[{"origin":"a","seq":1,"op":{}}]}',
+      new Uint8Array([0xdb, 0xff, 0xff, 0xff]).buffer,
+      new ArrayBuffer(0),
+      42,
+      { type: 'ops' },
+    ]) {
+      expect(() => {
+        net.inject(socketA, garbage);
+      }).not.toThrow();
+    }
+    expect(a.connection.lastError).not.toBeNull();
   });
 });

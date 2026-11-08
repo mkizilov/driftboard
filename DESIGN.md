@@ -453,17 +453,18 @@ board's own ids, so the sync layer does not look inside operations; the payload 
 operation's JSON form (`board-json.ts`). Operations of one origin travel in order; operations of
 different origins may arrive in any order because `Board.applyRemote` tolerates that.
 
-| Message    | Fields                                                         | Purpose                                                                                                                                                                                                                          |
-| ---------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `hello`    | `version` (3), `replicaId`, `boardId`, `versionVector`         | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own.                                                                                                                   |
-| `ops`      | `ops: [{ origin, seq, op }]`, 1 to 500                         | A batch of operations the receiver is missing. A binary frame.                                                                                                                                                                   |
-| `ack`      | `versionVector`                                                | "I hold everything this covers." Sent after receiving operations that were new.                                                                                                                                                  |
-| `presence` | `replicaId`, `state: { cursor, editing, name, color } \| null` | Ephemeral: where the pointer is (board coordinates, or `null`), which note is being edited (or `null`), and the person's name (1 to 80 characters) and colour (`#rrggbb`). Relayed, never stored. `null` means the replica left. |
-| `error`    | `code`, `message`                                              | A protocol violation; the sender then closes the connection.                                                                                                                                                                     |
+| Message    | Fields                                                           | Purpose                                                                                                                                                                                                                          |
+| ---------- | ---------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`    | `version` (3), `replicaId`, `boardId`, `versionVector`, `token`? | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. The optional `token` is a secret of this replica; see "Security and robustness".                                  |
+| `ops`      | `ops: [{ origin, seq, op }]`, 1 to 500                           | A batch of operations the receiver is missing. A binary frame.                                                                                                                                                                   |
+| `ack`      | `versionVector`                                                  | "I hold everything this covers." Sent after receiving operations that were new.                                                                                                                                                  |
+| `presence` | `replicaId`, `state: { cursor, editing, name, color } \| null`   | Ephemeral: where the pointer is (board coordinates, or `null`), which note is being edited (or `null`), and the person's name (1 to 80 characters) and colour (`#rrggbb`). Relayed, never stored. `null` means the replica left. |
+| `error`    | `code`, `message`                                                | A protocol violation; the sender then closes the connection.                                                                                                                                                                     |
 
 Error codes: `invalid_message`, `unsupported_version`, `wrong_board`, `unexpected_message`
-(for example `ops` before `hello`), `out_of_order` (an operation skips ahead of its origin's stream)
-and `conflicting_op` (a different operation under an origin and number already stored).
+(for example `ops` before `hello`), `out_of_order` (an operation skips ahead of its origin's stream),
+`conflicting_op` (a different operation under an origin and number already stored), `internal_error`
+and `rate_limited` (the connection sent more than it is allowed to).
 
 **Connecting.** Each side sends its version vector and the other answers with exactly the
 operations beyond it:
@@ -493,11 +494,14 @@ beyond it, so a repeated send is impossible; across connections the peer's `hell
 guess with the truth. Duplicated messages are harmless: a repeated `hello` is ignored, repeated
 operations are recognised by `(origin, seq)`, stored once, not acked and not relayed. The server
 treats a second connection of the same replica id as the old one coming back and drops the old
-session.
+session, if the new one knows the secret the old one came with (`hello.token`); one that does not is
+refused.
 
 **Validation.** `receive` checks every operation payload in depth (`BoardFormatError` rules from the
 board JSON), stores it in canonical form, and rejects the whole batch, leaving the store unchanged,
-for a bad payload, a gap or a conflict. A client may only send presence for itself.
+for a bad payload, a gap, a conflict or an operation that breaks the rules for the ids of its origin
+(`storeAdd`: `invalid`, answered with `invalid_message`; see "Security and robustness"). A client may
+only send presence for itself.
 
 **Presence.** Relayed to the other ready sessions, never stored with the operations or written to
 the database. A client sends its _whole_ state each time, so a message never depends on an earlier
@@ -528,6 +532,7 @@ client; a reconnect sends exactly the missing operations.
 **Not yet:** operations are never compacted away, and replica ids must be unique per device and tab
 (two live tabs sharing one id would write conflicting streams; `conflicting_op` catches that only
 when the operations differ). The web client takes a fresh id on every page load for this reason.
+What the protocol does against peers that misbehave is in "Security and robustness".
 
 ## Server **[implemented]**
 
@@ -543,7 +548,7 @@ The server binds to `127.0.0.1:22100` by default.
 server accepts only ids of 22 to 128 URL-safe characters (`generateBoardId()` makes 22 random
 base64url characters, 128 bits), never lists boards, and `/healthz` reveals nothing about them. A
 `hello` with any other id is rejected. Whoever knows the id can read and write the board; there is
-no per-user access control, rate limiting or expiry yet.
+no per-user access control or expiry. What a connection may send is limited, see "Security and robustness".
 
 **Rooms.** `SyncHub` keeps one `Room` (from `@driftboard/protocol`) per board id that has a
 connection. The first `hello` for an id loads the board from SQLite; when the last connection
@@ -565,6 +570,8 @@ fails a check gets one `error` message and is closed:
 | protocol violation (bad version, gap, conflict, invalid operation payload, presence for another replica)                                    | 1008       |
 | storage failure                                                                                                                             | 1011       |
 | the same replica connected again (the older connection is closed)                                                                           | 4001       |
+| more messages or operations than the rate limits allow (`rate_limited`), see "Security and robustness"                                      | 1008       |
+| an unexpected error while handling a frame                                                                                                  | 1011       |
 
 Other connections, and the board, are unaffected. Compression is off, so a small frame cannot expand
 past the limit.
@@ -618,6 +625,151 @@ connection are rejected and close the connection while other clients keep syncin
 on connections or rooms, compaction does not `VACUUM` (freed pages are reused but the file does not
 shrink), loading and compacting a board are synchronous and block the event loop for their duration,
 and the server holds a board's whole log in memory while it is open.
+
+## Security and robustness **[implemented]**
+
+The threat is a misbehaving _participant_: someone who has the board id (the id is the only access
+control, see "Access") and sends what they like, from a modified client or by hand. Nothing
+authenticates people or replica ids. The aim is that such a peer cannot crash the server or another
+client, cannot wedge an honest replica with anything cheap, cannot make anyone's memory grow without a
+bound at the rate it can send, and cannot make honest replicas disagree. It can still do what any
+participant can: write, move and delete.
+
+There are four layers. Each rule is applied where it can be decided the same way everywhere.
+
+**1. The frame (`hub.ts`, `server.ts`).** A frame is at most 1 MiB and must parse (see "Validation"
+above). Everything a frame can set off runs inside one `try`: an error the hub does not expect is
+reported through `onError` and closes _that_ connection with 1011 (the old code guarded only the sync
+logic, not the parser), and `server.ts` has a last guard around the hub call, because an exception in
+a `ws` event handler would end the process for every board.
+
+**2. Rate limits, per connection (`rate-limit.ts`).** Two token buckets: _messages_ (burst 1000,
+200 a second) and _operations_ (burst 200,000, 10,000 a second), paid for before the frame is parsed
+and before a batch is applied. A connection that cannot pay gets `rate_limited` and is closed with 1008. Honest clients send about 20 presence updates a second at most and a message per keystroke, and
+a long time offline goes out as a burst of messages of 500 operations, so there is room several times
+over; a device that has more than the burst to send gets there over a few reconnects, because what
+was stored stays stored. Set `DRIFTBOARD_RATE_MESSAGE_BURST`, `DRIFTBOARD_RATE_MESSAGES_PER_SECOND`,
+`DRIFTBOARD_RATE_OP_BURST` and `DRIFTBOARD_RATE_OPS_PER_SECOND` to change them (a burst of 0 turns
+that limit off). A flood on connections that never say `hello` is cut off at the first message.
+
+**3. The operation stream (`store.ts`).** `storeAdd` holds every origin's operations to rules about
+_ids_, on the server and on every client alike. Because they concern one origin's stream, in the
+order it was written, the answer does not depend on the order in which different origins' operations
+arrive, so every replica reaches the same verdict:
+
+- an id an operation introduces (a text insert's `id`, a write's `dot`) belongs to its origin, which
+  is the rule against claiming another replica's counter range;
+- it is the next in the origin's numbering: write dots 1, 2, 3, ... and, per note, character
+  counters 1, 2, 3, ... (this is also what keeps two operations from using one id for different
+  characters, the one thing that made applying a text throw);
+- an id of the origin's own that an operation refers to (a parent, a delete target, a replaced or
+  removed dot) is one it has introduced already, so an origin's operations never wait for its own
+  future.
+
+The server adds two things a client cannot ask of what it is sent: a board has operations from at
+most 1000 replicas (a `hello` has room for no more, so a board with a 1001st could not be joined),
+and, in the `Room`, a note's text holds at most `maxNoteNodes` characters, 100,000 by default and
+`DRIFTBOARD_MAX_NOTE_NODES` to change, deleted ones included because they stay in memory (`ledger.ts`;
+the count only grows, so arrival order cannot change the answer). A violation is a protocol violation:
+the batch is stored nowhere, the sender gets `invalid_message` and is closed.
+
+Two more rules need the room, which sees every connection. **A connection may not write in the name
+of a replica that another connection is speaking for**, so a live replica's stream cannot be extended
+by someone else. It _may_ write the operations of a replica that is not connected: every page load
+is a new replica, and the next page load sends what the last could not, in the order of the replica
+ids and not of anyone's writing. For the same reason the server does not ask that an id of another
+origin that an operation refers to exists yet. And **a `hello` for a replica id that is already
+connected is let in only with that replica's secret**: `hello.token`, made when the replica is (the
+web client makes it from the same source as the id), sent only in its own `hello` and never relayed.
+A reconnect before the server noticed the old connection died has the secret and replaces it, as
+before; someone who only knows or replays the id is refused and the replica stays where it is. Without
+this, saying a replica's id pushed it off the board, and its own reconnect pushed the intruder off in
+turn. A replica that came without a secret can be replaced by anyone, as before.
+
+**4. Applying (`Board.applyUntrusted`, `SyncConnection`).** The sync layer applies what the server
+sends with `applyUntrusted`, which never throws because of an operation. An operation that is
+malformed, would give one id two characters, would make a text longer than `maxNoteNodes` (default
+100,000) or arrives when 250,000 others (`MAX_PENDING_OPS`, shared by the note map and every note's
+text) already wait for something missing, is **quarantined**: set aside with a reason, counted
+(`Board.quarantinedCount`, `Board.quarantine` for the last 100, `SyncConnection.quarantinedCount`),
+and the rest of the batch goes through. When a buffer refuses an operation it refuses what waits for
+it too, and remembers the id (10,000 of them) to refuse what arrives later and needs it, so one
+refused character does not leave the rest of its run waiting for ever and using up the budget.
+`Board.applyRemote` keeps its old contract, an exception and no partial effect for a malformed batch,
+for logs that are trusted. The same care covers the disk: `restoreStore` keeps each origin's longest
+valid start and counts the rest as dropped, instead of failing to open the board, and `SyncConnection`
+catches whatever a message sets off, including the app's own callbacks, and closes only that
+connection (which retries).
+
+**Convergence under forged references.** An operation may refer to an id of a replica that does not
+exist yet, and the server cannot tell it from one that is merely late. Such an operation waits in the
+causal buffer, and it used to be that the replica itself never released it when it later wrote that
+id, while every other replica did: they never agreed. The fuzz test below found this. Now a local
+write tells the buffer (`CausalBuffer.supplied`), what was waiting is applied and subscribers hear of
+it as a _remote_ change, not as part of the edit the call returns (those operations are sent on as
+the replica's own).
+
+| Limit                         | Value                            | Where                                    |
+| ----------------------------- | -------------------------------- | ---------------------------------------- |
+| frame                         | 1 MiB                            | `ws`, `hub.ts`, `parseFrame`             |
+| operations in a message       | 500                              | `parseFrame`, schema                     |
+| messages / operations a conn. | 1000 + 200/s, 200,000 + 10,000/s | `rate-limit.ts`                          |
+| replicas on a board           | 1000                             | `storeAdd` on the server                 |
+| characters in a note's text   | 100,000                          | `Room` (server), `Board` (every replica) |
+| operations waiting for others | 250,000 per board                | `Board` (`PendingBudget`)                |
+| ids in one operation's list   | 1000                             | `board-json.ts`, `board-ops.ts`          |
+| quarantine kept               | last 100                         | `Board`                                  |
+
+**Not protected.** These are the limits of having no accounts, and of what a server can know:
+
+- **Replica ids and secrets are not accounts.** Someone can write operations that extend the stream
+  of a replica that is not connected. If that replica later returns, its next operation conflicts
+  with theirs and its connection is closed; the web client takes a new replica on every page load, so
+  in practice only the unsent operations of an earlier page load can be affected, not the page.
+- **Operations that wait for ids that never come.** An operation may refer to an id of another
+  origin that does not exist, and is accepted because it may only be late. It waits at every client,
+  up to the budget of 250,000, after which later operations that must wait are quarantined (a reload
+  clears the buffer). The refusal of what waits for a refused operation, and the per-origin rules,
+  keep this from growing by itself.
+- **A note's text cannot be shortened.** Characters stay in memory as tombstones and count against
+  the 100,000, so a note that has been edited a very great deal stops accepting text. Collecting
+  tombstones is in `PERFORMANCE.md`; it is not done.
+- **No limit on a board as a whole**, on its operations or its notes, other than the rate; none on the
+  number of connections or boards; no heartbeat; presence is relayed as the schema allows it, and
+  whatever a client does with a name or a position is the client's business.
+- **A flood of connections** is not slowed down; the limits are per connection.
+
+**Tested.** `crdt/src/untrusted.test.ts` (budget, refusals and their dependents, limits, junk and
+forged input to `applyUntrusted`, the release of waiting operations by a local write);
+`protocol/src/hostile.test.ts` (each kind of forged id, the order independence of the rules, the
+origin cap, the room's rules, the secret); `server/src/hub.test.ts` (rate limits with a clock the test
+moves, forged operations, the cap on a note, a frame that makes the parser throw, the secret);
+and two **fuzz tests** with fast-check:
+
+- `protocol/src/fuzz.test.ts` runs 500 random sessions of up to 60 actions against a `Room`. Two honest
+  clients edit while a hostile one sends raw text, JSON and bytes (also on connections that never said
+  `hello`), copies of real frames with bytes flipped, cut, repeated or inserted, and real operations
+  spoiled in thirteen ways (another origin, a skipped or repeated number, another replica's id, a
+  counter pushed ahead or to the largest integer, a parent or target that is not there, another or no
+  note, a text that is not one character, a side that is not a side, lists of 1000 ids, a replay).
+  It rejoins under a new replica when it is thrown out. Nothing may throw; neither honest client may
+  be closed; their stores must hold everything the room holds and their boards be identical with
+  nothing quarantined; and what the room holds must pass `storeAdd` from scratch, be canonical and
+  obey the limit on a note. It must also have got operations through and been refused, so that both
+  paths ran.
+- `server/src/fuzz.test.ts` does it over real sockets and a real database: 40 sessions of up to 25
+  actions with two honest clients and hostile connections that send garbage, bytes, mutated copies of
+  honest frames (never a `hello`, which carries a secret), spoiled operations, floods, frames of 2 MiB
+  and connections that say `hello` and then nothing. The server must stay up and answer `/healthz`,
+  report no unexpected error, keep both honest clients connected with identical boards, give a client
+  that joins afterwards the same board, and store only canonical operations; floods must be cut off.
+
+The fuzz tests found two real problems while they were written, both fixed and both now covered by
+the tests above: the release of waiting operations by a local write, and a `hello` that pushed a
+replica off the board. A mutation check of the protections (23 deliberate bugs, one at a time, each in
+the code that holds the rule) was caught by the tests in all 23 cases.
+
+## Web client **[implemented]**
 
 ## Web client **[implemented]**
 
@@ -892,4 +1044,4 @@ pinned by the `packageManager` field and run through corepack, the pnpm store is
 SQLite databases live in `./.data/`, and Playwright's Chromium is installed into the project with
 `PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Dev servers use loopback ports 22100–22199 (sync
 server 22100, Vite dev server 22101, Vite preview 22102); the end-to-end suite uses 22150 and 22151,
-and the unit test of `SyncServer` 22195.
+the server's WebSocket tests 22110 to 22139, its fuzz test 22140, and the unit test of `SyncServer` 22195.

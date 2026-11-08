@@ -10,10 +10,12 @@ import {
   type NoteColor,
   type NoteFields,
   type NoteView,
+  type QuarantinedOp,
 } from './board-ops';
-import { CausalBuffer } from './causal-buffer';
+import { CausalBuffer, PendingBudget } from './causal-buffer';
 import type { Clock } from './clock';
 import { HybridLogicalClock, compareHlc, formatHlc, type HlcTimestamp } from './hlc';
+import { MAX_NOTE_NODES, MAX_PENDING_OPS } from './limits';
 import { LwwRegister } from './lww-register';
 import { opId, opIdKey, type OpId } from './op-id';
 import { compareValues } from './ordering';
@@ -24,6 +26,10 @@ export interface BoardOptions {
   readonly replicaId: ReplicaId;
   /** Physical clock in whole milliseconds. Injected so that tests and simulations control it. */
   readonly clock: Clock;
+  /** Most remote operations held back at once for missing ones. Default `MAX_PENDING_OPS`. */
+  readonly maxPendingOps?: number;
+  /** Most characters, deleted ones included, in one note's text. Default `MAX_NOTE_NODES`. */
+  readonly maxNoteNodes?: number;
 }
 
 export interface NoteInit {
@@ -58,6 +64,17 @@ function filled<T>(register: LwwRegister<T>): T {
   return value;
 }
 
+/** How many quarantined operations a board remembers; it counts all of them. */
+const QUARANTINE_KEEP = 100;
+
+function countPoints(text: string): number {
+  return text === '' ? 0 : [...text].length;
+}
+
+function reasonOf(error: unknown): string {
+  return (error instanceof Error ? error.message : String(error)).slice(0, 200);
+}
+
 /** Throws the error if there is one, or an `AggregateError` if there are several. */
 function raise(errors: readonly unknown[]): void {
   if (errors.length === 1) throw errors[0];
@@ -84,10 +101,19 @@ export class Board {
   readonly #notesBuffer: CausalBuffer<AwMapOp<NoteFields>>;
   readonly #log: BoardOp[] = [];
   readonly #listeners = new Set<(change: BoardChange) => void>();
+  /** One limit for the operations held back in the note map and in every note's text. */
+  readonly #pending: PendingBudget;
+  readonly #maxNoteNodes: number;
+  readonly #quarantine: QuarantinedOp[] = [];
+  #quarantined = 0;
+  /** Remote operations applied because of the local write in progress, to be announced after it. */
+  #released: Changes | undefined;
   #notes = AwMap.empty<NoteFields>(joinFields);
 
   constructor(options: BoardOptions) {
     this.replicaId = options.replicaId;
+    this.#pending = new PendingBudget(options.maxPendingOps ?? MAX_PENDING_OPS);
+    this.#maxNoteNodes = options.maxNoteNodes ?? MAX_NOTE_NODES;
     // Remote timestamps are never rejected here: a replica that dropped an operation another one
     // applied would diverge. Bounding clock drift is the server's job, before operations are shared.
     this.#hlc = new HybridLogicalClock({
@@ -96,6 +122,7 @@ export class Board {
       maxDriftMs: Number.MAX_SAFE_INTEGER,
     });
     this.#notesBuffer = new CausalBuffer<AwMapOp<NoteFields>>({
+      budget: this.#pending,
       provides: (op) => (op.type === 'put' ? op.dot : undefined),
       requires: (op) => {
         if (op.type === 'remove') return op.dots;
@@ -153,9 +180,17 @@ export class Board {
 
   /** Remote operations held back until the operations they depend on arrive. */
   get pendingCount(): number {
-    let pending = this.#notesBuffer.size;
-    for (const sequence of this.#texts.values()) pending += sequence.pendingCount;
-    return pending;
+    return this.#pending.used;
+  }
+
+  /** The most recent operations `applyUntrusted` set aside, oldest first (the last 100). */
+  get quarantine(): readonly QuarantinedOp[] {
+    return this.#quarantine;
+  }
+
+  /** How many operations `applyUntrusted` has set aside in all. */
+  get quarantinedCount(): number {
+    return this.#quarantined;
   }
 
   /**
@@ -227,6 +262,7 @@ export class Board {
     assertColor(color);
     // The id is the note's first write: the creating replica's next map counter.
     const id = opIdKey(opId(this.#notes.version.get(this.replicaId) + 1, this.replicaId));
+    this.#sequence(id).assertRoom(countPoints(text)); // before anything changes
     const at = this.#hlc.tick();
     const fields: NoteFields = {
       x: written(LwwRegister.empty<number>(), x, at),
@@ -235,7 +271,7 @@ export class Board {
       color: written(LwwRegister.empty<NoteColor>(), color, at),
     };
     const changes = this.#newChanges();
-    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, id, fields), changes);
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, id, fields), changes, true);
     this.#recordText(id, this.#sequence(id).insert(0, text), changes);
     return { id, ops: this.#finishLocal(changes) };
   }
@@ -271,12 +307,13 @@ export class Board {
   editText(noteId: string, index: number, deleteCount: number, insert: string): BoardOp[] {
     const fields = this.#require(noteId);
     const sequence = this.#sequence(noteId);
+    sequence.assertRoom(countPoints(insert)); // before the deletions are applied
     const changes = this.#newChanges();
     this.#recordText(noteId, sequence.delete(index, deleteCount), changes);
     this.#recordText(noteId, sequence.insert(index, insert), changes);
     if (changes.applied.length === 0) return [];
     // Re-assert the note, so that a concurrent delete of it does not hide this edit.
-    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes, true);
     return this.#finishLocal(changes);
   }
 
@@ -290,7 +327,7 @@ export class Board {
     const changes = this.#newChanges();
     this.#recordText(noteId, this.#sequence(noteId).insertAfter(after, text), changes);
     if (changes.applied.length === 0) return [];
-    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes, true);
     return this.#finishLocal(changes);
   }
 
@@ -315,7 +352,7 @@ export class Board {
   restoreNote(noteId: string, fields: NoteFields): BoardOp[] {
     if (this.#notes.get(noteId) !== undefined) return [];
     const changes = this.#newChanges();
-    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes, true);
     return this.#finishLocal(changes);
   }
 
@@ -338,6 +375,35 @@ export class Board {
     }
     errors.push(...this.#publish('remote', changes));
     raise(errors);
+  }
+
+  /**
+   * Like `applyRemote`, for operations that may come from a misbehaving peer: nothing an operation
+   * contains makes this throw. An operation that is malformed, that cannot be applied (an id used
+   * twice for different characters), that would make a text too long, or that arrives when too many
+   * others are already waiting for missing ones, is set aside (see `quarantine`) and the rest go
+   * through. Returns the operations set aside by this call. Only errors thrown by subscribers
+   * still surface, after the change has been applied.
+   */
+  applyUntrusted(ops: readonly unknown[]): QuarantinedOp[] {
+    const changes = this.#newChanges();
+    const rejected: QuarantinedOp[] = [];
+    const reject = (op: unknown, error: unknown): void => {
+      rejected.push({ op, reason: reasonOf(error) });
+    };
+    for (const op of ops) {
+      try {
+        assertValidBoardOp(op as BoardOp);
+        this.#integrate(op as BoardOp, changes, reject);
+      } catch (error) {
+        reject(op, error);
+      }
+    }
+    for (const entry of rejected) this.#quarantine.push(entry);
+    this.#quarantined += rejected.length;
+    this.#quarantine.splice(0, Math.max(0, this.#quarantine.length - QUARANTINE_KEEP));
+    raise(this.#publish('remote', changes));
+    return rejected;
   }
 
   // ---- Internals --------------------------------------------------------------------------
@@ -368,7 +434,10 @@ export class Board {
   #sequence(noteId: string): TextSequence {
     let sequence = this.#texts.get(noteId);
     if (sequence === undefined) {
-      sequence = new TextSequence(this.replicaId);
+      sequence = new TextSequence(this.replicaId, {
+        maxNodes: this.#maxNoteNodes,
+        pending: this.#pending,
+      });
       this.#texts.set(noteId, sequence);
     }
     return sequence;
@@ -381,7 +450,7 @@ export class Board {
   /** Writes the note's new value as a map write that replaces the dots this replica has seen. */
   #write(noteId: string, fields: NoteFields): BoardOp[] {
     const changes = this.#newChanges();
-    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes, true);
     return this.#finishLocal(changes);
   }
 
@@ -394,25 +463,56 @@ export class Board {
   /** Records text operations that `TextSequence.insert` or `delete` already applied locally. */
   #recordText(noteId: string, ops: readonly TextOp[], changes: Changes): void {
     for (const op of ops) this.#record(changes, { type: 'text', noteId, op });
+    // Text that other replicas wrote for characters this replica has only now made (see
+    // `CausalBuffer.supplied`) is applied now, and is theirs, not part of this edit.
+    for (const op of this.#sequence(noteId).takeReleased()) {
+      this.#record(this.#releasedChanges(), { type: 'text', noteId, op });
+    }
   }
 
-  #applyNotesOp(op: AwMapOp<NoteFields>, changes: Changes): void {
+  /** `local`: the operation was just made here, so what was waiting for its dot can go ahead. */
+  #applyNotesOp(op: AwMapOp<NoteFields>, changes: Changes, local = false): void {
     const next = this.#notes.apply(op);
     if (next === this.#notes) return; // already applied, or removes nothing
     this.#notes = next;
     this.#record(changes, { type: 'notes', op });
-    if (op.type === 'put') this.#observe(op.value);
+    if (op.type !== 'put') return;
+    this.#observe(op.value);
+    if (local) {
+      this.#notesBuffer.supplied(
+        op.dot,
+        (ready) => {
+          this.#applyNotesOp(ready, this.#releasedChanges());
+        },
+        () => undefined,
+      );
+    }
   }
 
-  #integrate(op: BoardOp, changes: Changes): void {
+  /** What other replicas wrote that was applied only because of a local write. */
+  #releasedChanges(): Changes {
+    return (this.#released ??= this.#newChanges());
+  }
+
+  /** With `reject`, an operation that fails goes there instead of throwing. */
+  #integrate(op: BoardOp, changes: Changes, reject?: (op: unknown, error: unknown) => void): void {
     if (op.type === 'notes') {
-      this.#notesBuffer.receive(op.op, (ready) => {
-        this.#applyNotesOp(ready, changes);
-      });
+      this.#notesBuffer.receive(
+        op.op,
+        (ready) => {
+          this.#applyNotesOp(ready, changes);
+        },
+        reject && ((failed, error) => reject({ type: 'notes', op: failed }, error)),
+      );
     } else {
-      this.#sequence(op.noteId).apply(op.op, (applied) => {
-        this.#record(changes, { type: 'text', noteId: op.noteId, op: applied });
-      });
+      this.#sequence(op.noteId).apply(
+        op.op,
+        (applied) => {
+          this.#record(changes, { type: 'text', noteId: op.noteId, op: applied });
+        },
+        reject &&
+          ((failed, error) => reject({ type: 'text', noteId: op.noteId, op: failed }, error)),
+      );
     }
   }
 
@@ -429,7 +529,11 @@ export class Board {
   }
 
   #finishLocal(changes: Changes): BoardOp[] {
-    raise(this.#publish('local', changes));
+    const errors = this.#publish('local', changes);
+    const released = this.#released;
+    this.#released = undefined;
+    if (released !== undefined) errors.push(...this.#publish('remote', released));
+    raise(errors);
     return changes.applied;
   }
 

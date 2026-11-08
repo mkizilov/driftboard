@@ -29,6 +29,11 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 | `bench`             | Benchmarks (`@driftboard/bench`): the scenarios (`src/*-scenarios.ts`: 100,000 text operations, a board of 1,000 notes with long texts, a sync after a long offline period, tombstone growth, wire sizes), their `vitest bench` files (`*.bench.ts`), the tests that keep the scenarios honest (`scenarios.test.ts`, run by `pnpm test`) and `report.ts`, which prints the tables of `PERFORMANCE.md`.                                                                                                                                                                                                                                                                                                                                                                                                         |
 | `e2e`               | Playwright end-to-end suite (`@driftboard/e2e`). `tests/*.spec.ts` start the real sync server (fixture `syncServer`, `support/sync-server.ts`, port 22150, own database in `.data/`) and the production web build (`vite preview`, port 22151), and drive 2-3 Chromium contexts on one board through `support/person.ts`; every test ends with `expectConverged` (identical boards in all contexts). Specs: concurrent typing, simultaneous moves, `context.setOffline`, server restart/kill, page reload, and a seeded monkey test (200 random actions; `E2E_SEED`, `E2E_MONKEY_RUNS`). The pure helpers in `support/` (seeded rng, monkey plan and runner, board parsing and comparison, geometry, polling, `SyncServer`) have Vitest unit tests that `pnpm test` runs; the specs run only under `pnpm e2e`. |
 
+The server limits what one connection may send and what a board may hold, and everything that
+comes from another replica (or from the disk) is checked, set aside rather than thrown on, and
+counted: see "Security and robustness" in `DESIGN.md` before changing `store.ts`, `room.ts`,
+`ledger.ts`, `hub.ts`, `rate-limit.ts`, `Board.applyUntrusted` or `CausalBuffer`.
+
 Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
 separate library build step. The server runs through `tsx`.
 
@@ -91,67 +96,53 @@ disable those rules.
 
 ## Known state
 
-The scaffold, `packages/crdt`, `packages/protocol`, `apps/server` and `apps/web` (turns 1-11) were
-written in an environment with no network access, so no `pnpm install` has run: there is no
-`pnpm-lock.yaml` yet and `pnpm check` has not been executed. The tests were only run under throwaway
-minimal stand-ins for Vitest, fast-check and zod (which cover only the features used), plus, for the
-server, an adapter over Node's built-in `node:sqlite` in place of better-sqlite3 and a hand-written
-RFC 6455 server in place of `ws` (its clients were Node's own WebSocket), on Node's built-in type
-stripping. Nothing has run against the real packages or `tsc`/ESLint, so type or lint errors and
-failures that only the real packages would show are still possible; the real `ws` and better-sqlite3
-integration in `apps/server` is the least verified part.
+Turns 1-13 were written with no network access, on throwaway stand-ins for Vitest, fast-check, zod,
+better-sqlite3 and `ws`. Turn 14 had network access: the project's tools were installed into the
+repository (pnpm 9.15.9 and Node 22.12.0 under `.agent-local/tools`, because the host has Node 26 and
+no pnpm; `.agent-local/env.sh` puts them first on `PATH` and points HOME and the caches at
+`.agent-local`; both are git-ignored, and any Node 22.12 with pnpm 9 does as well),
+`pnpm-lock.yaml` was generated and committed, CI now installs with `--frozen-lockfile`, and
+everything ran on the real packages for the first time.
 
-In `apps/web` the framework-free tests (`src/lib/*.test.ts`) ran under those stand-ins; for
-IndexedDB the stand-in is a small in-memory replacement for `idb` (object stores, indexes,
-transactions that roll back on a failed request), so `lib/idb-storage.ts` ran, but against my model
-of IndexedDB and not the real one, and `fake-indexeddb` has never run. React, Vite, jsdom,
-`vite-plugin-pwa` and `idb` have never been installed, so the `.tsx` files, the hooks, `Canvas`
-pointer and wheel handling, the styles, the ten component tests (`NoteTextArea`, `NoteCard`,
-`BoardPage`, `SyncIndicator`, `PwaBanner`, `Cursors`, `PeopleList`, `UndoRedo`, `HomePage`, `App`;
-the presence ones assume React turns `pointerout` into `onPointerLeave` and that jsdom dispatches
-`pointermove` events typed as `MouseEvent`, the undo ones that jsdom has `InputEvent` with
-`inputType`), the build, the service worker and the
-manifest as the browser sees them have never been compiled or executed, and nothing has been seen
-in a browser. The component tests are the first thing to run: if they fail, check them against the
-real DOM before changing `lib/text-binding.ts` or `lib/offline-first.test.ts`'s expectations, which
-the `lib` tests pin down. Whether the app really installs and opens offline has to be checked by
-hand with `pnpm --filter @driftboard/web build` and `preview` (port 22102), then DevTools >
-Application, and presence by opening one board in two browsers. The server's `apps/server/src/
-server.test.ts` was changed this turn only in the presence literal of one test (the `ws` stand-in
-is gone), so it has not been re-run; `hub.test.ts`, which covers the same path, ran on the
-`node:sqlite` adapter. Dependency versions added for the web app (`idb`, `vite-plugin-pwa`, `fake-indexeddb`,
-`jsdom`, `fast-check`) are from memory, like the others. On the first machine with
-network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
-`pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
-`--frozen-lockfile`. Delete this section once that is done.
+What now runs for real and passes: `pnpm test` in every package (CRDT 349 tests, protocol 176, server
+107 including `server.test.ts` over real `ws` and better-sqlite3 and the fuzz test, web 518 including
+the component tests on React 18 with jsdom and `storage.test.ts` on fake-indexeddb, bench scenarios
+15, e2e helpers 96), `tsc --noEmit` in every package, ESLint and Prettier. That first run found and
+fixed real defects of the earlier turns (commit `c005fec`): `IdbBoardStorage.write` left half a
+batch behind when a value could not be stored, `NoteCard` kept saying its person was editing a note
+that was deleted under it, the bench package's Vitest `benchmark` option was in the wrong place (so
+`vitest bench` would have ignored it), and some tests that had only ever agreed with the stand-ins.
+In the turn-14 commit the first real `pnpm build` of the web app failed (and so would `pnpm e2e`):
+`virtual:pwa-register` imports `workbox-window`, which the app did not declare; it does now.
 
-The `e2e` package (turn 12) is the least verified part. Playwright and its Chromium were not
-installed (no network) and the sandbox has no browser, so **no spec has ever run**: not one browser
-context was opened, and neither the production web build under `vite preview`, nor the real server
-started by the `syncServer` fixture, nor `context.setOffline` against the real page has been seen
-working together. What did run: the Vitest unit tests of the pure helpers in `e2e/support/` (under
-the same throwaway Vitest stand-in as above), and a TypeScript check of the whole package (support,
-specs, fixtures, config) against hand-written declarations of the parts of `node:*`, Vitest and
-`@playwright/test` that it uses, which only proves the code agrees with my memory of those APIs.
-The pinned `@playwright/test` 1.49.1 is from memory like the other versions. Things most likely to
-need a fix on the first real run, in this order: the selectors and geometry in `support/person.ts`
-(the header grab point `HEADER_GRAB_X`, `elementFromPoint` checks, forced double-click), the
-`webServer` command in `playwright.config.ts` (`vite build/preview --outDir ../../e2e/dist/web`),
-`node --import tsx` starting `apps/server/src/main.ts`, timing in the restart tests (reconnect
-backoff is up to 15 s; `SYNC_TIMEOUT_MS` is 30 s), and the exact-text assertions in
-`concurrent-typing.spec.ts` and `offline.spec.ts`, which rely on `lib/caret.ts` keeping a caret in
-place when text is inserted before it (a failure there is a finding about the app, not the test).
-Run `pnpm e2e:install` once, then `pnpm e2e`; the monkey test prints its seed in its title and
-attaches its plan and per-action report.
+Still unverified:
 
-Turn 13 (performance) was again written with no network, and verified on throwaway stand-ins for
-Vitest, fast-check and zod, `node:sqlite` in place of better-sqlite3, and Node 26's type stripping.
-What ran: all CRDT tests (309 before, plus the new `order-tree` and `text-sequence-index` tests),
-all protocol tests (152, with the binary codec and frames), the server's hub, storage, snapshot, db
-and config tests (69), the web `lib` tests that do not need `fake-indexeddb` (382, with binary frames
-through the fake network), the bench scenario tests (15), and `bench/src/report.ts` at full size. What
-did not run: `vitest bench` itself, `apps/server/src/server.test.ts` (real `ws`; it was updated for
-binary frames), the `ws` and browser `WebSocket` binary handling, `storage.test.ts` of the web app
-(needs `fake-indexeddb`), the Playwright suite (it now goes over binary frames and is still
-unrun), and `tsc`/ESLint/Prettier for everything new. Since the `e2e` ports 22110 and 22111 of turn
-12 collided with the range `server.test.ts` reserves (22110-22139), the suite now uses 22150 and 22151.
+- **The `e2e` package (turn 12): no spec has ever run.** Its Chromium is not installed (`pnpm e2e:install`
+  has not been run here) and the sandbox has no browser, so not one browser context was
+  opened, and neither the production web build under `vite preview`, nor the real server started by
+  the `syncServer` fixture, nor `context.setOffline` against the real page has been seen working
+  together. What ran: the Vitest unit tests of the pure helpers in `e2e/support/` and the TypeScript
+  check of the whole package. The pinned `@playwright/test` 1.49.1 installs. Things most likely to
+  need a fix on the first real run, in this order: the selectors and geometry in `support/person.ts`
+  (the header grab point `HEADER_GRAB_X`, `elementFromPoint` checks, forced double-click), the
+  `webServer` command in `playwright.config.ts` (`vite build/preview --outDir ../../e2e/dist/web`),
+  `node --import tsx` starting `apps/server/src/main.ts`, timing in the restart tests (reconnect
+  backoff is up to 15 s; `SYNC_TIMEOUT_MS` is 30 s), and the exact-text assertions in
+  `concurrent-typing.spec.ts` and `offline.spec.ts`, which rely on `lib/caret.ts` keeping a caret in
+  place when text is inserted before it (a failure there is a finding about the app, not the test).
+  The suite goes over binary frames and, since turn 14, sends a connection secret in `hello`. Run
+  `pnpm e2e:install` once, then `pnpm e2e`; the monkey test prints its seed in its title and attaches
+  its plan and per-action report.
+- **Nothing has been seen in a browser**: the `.tsx` files are covered by the component tests only.
+  Whether the app installs and opens offline has to be checked by hand: build the web app, serve it
+  with `preview` (port 22102), then DevTools > Application; and presence by opening one board in two
+  browsers.
+- `pnpm bench` (`vitest bench`) has not been run. `pnpm bench:report` has, on Node 22.12.
+- The numbers in `PERFORMANCE.md` were measured on Node 26.13; a re-run on Node 22.12 after turn 14
+  was within about 15% of them on every scenario (not a controlled comparison).
+
+Turn 14 (security and robustness) is described in `DESIGN.md`, "Security and robustness". Its tests
+run on the real tools, and so do the fuzz tests (`packages/protocol/src/fuzz.test.ts` against a
+`Room`; `apps/server/src/fuzz.test.ts` over real sockets on port 22140), which found two real
+problems while they were written. The e2e ports 22150 and 22151 and the server tests' 22110-22139
+do not overlap with the fuzz test's 22140.

@@ -5,7 +5,7 @@ import {
   generateReplicaId,
   type ReplicaId,
 } from '@driftboard/crdt';
-import { storeMissing, toBoardOps } from '@driftboard/protocol';
+import { readBoardOps, storeMissing } from '@driftboard/protocol';
 import { BoardStore } from './board-store';
 import { IdentityStore } from './identity';
 import { Persistence, restoreStore } from './persistence';
@@ -79,7 +79,9 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
   const replicaId = generateReplicaId(options.randomBytes);
   const now = options.now ?? (() => Date.now());
   const board = new Board({ replicaId, clock: { now } });
-  board.applyRemote(toBoardOps(storeMissing(restored, VersionVector.empty)));
+  // The disk is not trusted either: what cannot be applied is set aside, not allowed to stop the
+  // board from opening.
+  board.applyUntrusted(readBoardOps(storeMissing(restored, VersionVector.empty)).ops);
 
   const persistence = new Persistence(options.storage);
   const timers = options.timers ?? browserTimers;
@@ -88,6 +90,8 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
   const connection = new SyncConnection({
     boardId: options.boardId,
     replicaId,
+    // Made with the replica, from the same source: nobody else knows it (see `Hello.token`).
+    secret: generateReplicaId(options.randomBytes),
     url: options.url,
     board,
     initial: { store: restored, held: VersionVector.from(stored.held) },

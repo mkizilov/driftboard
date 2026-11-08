@@ -40,6 +40,26 @@ describe('restoreStore', () => {
     expect(dropped).toBe(ops.length - 3);
   });
 
+  it('keeps only the operations before one the store refuses, instead of failing to open', () => {
+    const ops = operations(1, ['abcd']);
+    // [put, a, b, c, d, put again]: the third character claims an id of someone else's.
+    const third = must(ops[3]);
+    const forged = { ...third, op: { ...third.op, id: '1@someone-else' } };
+    const { store, dropped } = restoreStore([...ops.slice(0, 3), forged, ...ops.slice(4)]);
+    expect(storeSize(store)).toBe(3);
+    expect(dropped).toBe(ops.length - 3);
+  });
+
+  it('finds where the refused operations start, whatever the length of the log', () => {
+    const ops = operations(1, ['x'.repeat(40)]);
+    for (const at of [1, 2, 17, ops.length - 1]) {
+      const bad = must(ops[at]);
+      const forged = { ...bad, op: { ...bad.op, dot: '9@someone-else', id: '9@someone-else' } };
+      const { store } = restoreStore([...ops.slice(0, at), forged, ...ops.slice(at + 1)]);
+      expect(storeSize(store)).toBe(at);
+    }
+  });
+
   it('uses the first copy when two stored copies of an operation differ', () => {
     const ops = operations(1, ['ab']);
     const original = must(ops[1]);

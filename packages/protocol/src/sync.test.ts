@@ -16,7 +16,7 @@ import {
   type Session,
   type SessionStep,
 } from './sync';
-import { must, presenceState, stamped, storeOf } from './test-support';
+import { boardOps, must, presenceState, stamped, storeOf } from './test-support';
 
 const a = replicaId('a');
 const b = replicaId('b');
@@ -181,7 +181,8 @@ describe('the handshake', () => {
   it("brings back a replica's own operations after it lost its data, and numbers on from them", () => {
     const pair = synced(emptyStore, storeOf(stamped(c, 1, 3)));
     expect(pair.client.applied.map(label)).toEqual(['c1', 'c2', 'c3']);
-    const next = authorOps(pair.client.store, c, newBoard(c).createNote().ops);
+    // The fourth operation of replica c, from the board that made the first three.
+    const next = authorOps(pair.client.store, c, boardOps(c, 4).slice(3));
     expect(next.ops.map((op) => op.seq)).toEqual([4]);
   });
 });
@@ -196,7 +197,7 @@ describe('after the handshake', () => {
     expect(sentOps(first.send)).toEqual(['c1']);
     expect(flush(first.session, authored.store).send).toEqual([]);
 
-    const more = authorOps(authored.store, c, newBoard(c).createNote({ x: 5 }).ops);
+    const more = authorOps(authored.store, c, boardOps(c, 2).slice(1));
     expect(more.ops.map((op) => op.seq)).toEqual([2]);
     expect(sentOps(flush(first.session, more.store).send)).toEqual(['c2']);
   });
@@ -269,23 +270,23 @@ describe('protocol violations close the session with an error', () => {
   });
 
   it('an operation that skips ahead in its origin stream', () => {
-    const skipped: Message = { type: 'ops', ops: stamped(a, 2, 1) };
+    const skipped: Message = { type: 'ops', ops: stamped(c, 2, 1) };
     const step = receive(readyServer(), emptyStore, skipped);
     expectClosed(step, 'out_of_order');
     expect(step.store).toBe(emptyStore);
   });
 
   it('an operation that differs from the stored one with the same number', () => {
-    const store = storeOf(stamped(a, 1, 1));
-    const different = authorOps(emptyStore, a, newBoard(a).createNote({ x: 9 }).ops);
+    const store = storeOf(stamped(c, 1, 1));
+    const different = authorOps(emptyStore, c, newBoard(c).createNote({ x: 9 }).ops);
     const step = receive(readyServer(), store, { type: 'ops', ops: different.ops });
     expectClosed(step, 'conflicting_op');
     expect(step.store).toBe(store);
   });
 
   it('a payload that is not a valid board operation, without storing any of the batch', () => {
-    const good = must(stamped(a, 1, 1)[0]);
-    const bad = { origin: a, seq: 2, op: { type: 'note-put', noteId: 'n' } };
+    const good = must(stamped(c, 1, 1)[0]);
+    const bad = { origin: c, seq: 2, op: { type: 'note-put', noteId: 'n' } };
     const step = receive(readyServer(), emptyStore, { type: 'ops', ops: [good, bad] });
     expectClosed(step, 'invalid_message');
     expect(step.store).toBe(emptyStore);

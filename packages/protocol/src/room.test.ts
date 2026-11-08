@@ -44,6 +44,8 @@ class Rig {
   /** Types of the messages sent to each connection, in order. */
   readonly types = new Map<string, string[]>();
   closed: string[] = [];
+  /** One board per replica, as a real client has: its counters carry on across calls. */
+  readonly #boards = new Map<ReplicaId, Board>();
   #toServer: { conn: string; message: Message }[] = [];
   #toClients: Outgoing[] = [];
   #serial = 0;
@@ -76,7 +78,11 @@ class Rig {
 
   /** The client creates `count` notes and sends the operations if it is connected. */
   author(client: Client, count = 1): void {
-    const board = new Board({ replicaId: client.id, clock: createManualClock(1000) });
+    let board = this.#boards.get(client.id);
+    if (board === undefined) {
+      board = new Board({ replicaId: client.id, clock: createManualClock(1000) });
+      this.#boards.set(client.id, board);
+    }
     for (let index = 0; index < count; index += 1) {
       const authored = authorOps(client.store, client.id, board.createNote({ x: index }).ops);
       client.store = authored.store;

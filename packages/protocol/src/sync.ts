@@ -1,5 +1,10 @@
 import { VersionVector, type BoardOp, type ReplicaId } from '@driftboard/crdt';
-import { MAX_ERROR_MESSAGE_LENGTH, MAX_OPS_PER_MESSAGE, PROTOCOL_VERSION } from './constants';
+import {
+  MAX_ERROR_MESSAGE_LENGTH,
+  MAX_OPS_PER_MESSAGE,
+  MAX_VECTOR_ENTRIES,
+  PROTOCOL_VERSION,
+} from './constants';
 import type { ErrorCode, ErrorMessage, Hello, Message, Ops, Presence } from './messages';
 import { canonicalizeOp, stampOps, type StampedOp } from './ops';
 import { storeAdd, storeMissing, storeVector, type OpStore } from './store';
@@ -30,6 +35,8 @@ export interface Session {
   readonly phase: Phase;
   /** The other side's replica id, known once its `hello` has been accepted. */
   readonly peer: ReplicaId | null;
+  /** The secret that came with that `hello`, if there was one; see `Hello.token`. */
+  readonly peerToken: string | null;
   /** Operations the peer is known to hold, or that were sent to it on this connection. */
   readonly sent: VersionVector;
   /** Operations the peer has confirmed holding. */
@@ -65,19 +72,25 @@ function vectorOfOps(ops: readonly { origin: ReplicaId; seq: number }[]): Versio
   return VersionVector.from(ops.map((op) => [op.origin, op.seq] as const));
 }
 
-export function helloMessage(self: ReplicaId, boardId: string, store: OpStore): Hello {
+export function helloMessage(
+  self: ReplicaId,
+  boardId: string,
+  store: OpStore,
+  token?: string,
+): Hello {
   return {
     type: 'hello',
     version: PROTOCOL_VERSION,
     replicaId: self,
     boardId,
     versionVector: vectorToWire(storeVector(store)),
+    ...(token === undefined ? {} : { token }),
   };
 }
 
 /** Starts the client side: the session waits for the server's `hello`; send `send` first. */
 export function openInitiator(
-  options: { self: ReplicaId; boardId: string },
+  options: { self: ReplicaId; boardId: string; token?: string },
   store: OpStore,
 ): { session: Session; send: Message[] } {
   const session: Session = {
@@ -86,10 +99,14 @@ export function openInitiator(
     boardId: options.boardId,
     phase: 'awaiting-hello',
     peer: null,
+    peerToken: null,
     sent: VersionVector.empty,
     acked: VersionVector.empty,
   };
-  return { session, send: [helloMessage(options.self, options.boardId, store)] };
+  return {
+    session,
+    send: [helloMessage(options.self, options.boardId, store, options.token)],
+  };
 }
 
 /** Starts the server side of a new connection, to be fed the client's `hello`. */
@@ -100,6 +117,7 @@ export function openResponder(options: { self: ReplicaId; boardId: string }): Se
     boardId: options.boardId,
     phase: 'awaiting-hello',
     peer: null,
+    peerToken: null,
     sent: VersionVector.empty,
     acked: VersionVector.empty,
   };
@@ -151,7 +169,12 @@ function idle(session: Session, store: OpStore): SessionStep {
 }
 
 /** A protocol violation: answer with an error and close the session. */
-function violation(session: Session, store: OpStore, code: ErrorCode, text: string): SessionStep {
+export function violation(
+  session: Session,
+  store: OpStore,
+  code: ErrorCode,
+  text: string,
+): SessionStep {
   return {
     ...idle({ ...session, phase: 'closed' }, store),
     send: [errorMessage(code, text)],
@@ -176,6 +199,7 @@ function onHello(session: Session, store: OpStore, message: Hello): SessionStep 
     ...session,
     phase: 'ready',
     peer: message.replicaId,
+    peerToken: message.token ?? null,
     sent: known,
     acked: known,
   };
@@ -189,6 +213,11 @@ function onOps(session: Session, store: OpStore, message: Ops): SessionStep {
   if (session.phase !== 'ready') {
     return violation(session, store, 'unexpected_message', 'ops before hello');
   }
+  // The server hears from clients: a client may send operations of earlier replicas of its device
+  // that the server lacks (every page load is a new replica), in the order of the replica ids and
+  // not of anyone's writing, so whose stream they extend is for the room to judge, see
+  // `roomReceive`. The server also keeps a board to the replicas a hello can name.
+  const options = session.role === 'responder' ? { maxOrigins: MAX_VECTOR_ENTRIES } : {};
   const stamped: StampedOp[] = [];
   for (const wire of message.ops) {
     try {
@@ -198,9 +227,14 @@ function onOps(session: Session, store: OpStore, message: Ops): SessionStep {
       return violation(session, store, 'invalid_message', text);
     }
   }
-  const result = storeAdd(store, stamped);
+  const result = storeAdd(store, stamped, options);
   if (!result.ok) {
-    const code = result.reason === 'gap' ? 'out_of_order' : 'conflicting_op';
+    const code =
+      result.reason === 'gap'
+        ? 'out_of_order'
+        : result.reason === 'conflict'
+          ? 'conflicting_op'
+          : 'invalid_message';
     return violation(session, store, code, result.detail);
   }
   // Whatever the peer sent, it holds: never send it back, new or not, and count it as confirmed.

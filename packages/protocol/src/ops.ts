@@ -37,3 +37,20 @@ export function stampOps(
 export function toBoardOps(ops: readonly StampedOp[]): BoardOp[] {
   return ops.map((stamped) => boardOpFromJson(stamped.op));
 }
+
+/**
+ * Like `toBoardOps`, for operations from a peer or a disk that may be damaged: the ones that are not
+ * valid board operations are left out and counted instead of making this throw. The operations of a
+ * server that checks them, or stored by this client, are all valid.
+ */
+export function readBoardOps(ops: readonly StampedOp[]): { ops: BoardOp[]; invalid: number } {
+  const valid: BoardOp[] = [];
+  for (const stamped of ops) {
+    try {
+      valid.push(boardOpFromJson(stamped.op));
+    } catch {
+      // Counted below.
+    }
+  }
+  return { ops: valid, invalid: ops.length - valid.length };
+}

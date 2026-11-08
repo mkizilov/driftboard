@@ -3,6 +3,7 @@ import { MAX_FRAME_BYTES } from '@driftboard/protocol';
 import type Database from 'better-sqlite3';
 import WebSocket, { WebSocketServer } from 'ws';
 import { SyncHub, type HubOptions } from './hub';
+import type { RateLimits } from './rate-limit';
 import { BoardStorage } from './storage';
 
 /** Clients connect to `ws://host:port/ws`. */
@@ -22,6 +23,10 @@ export interface SyncServerOptions {
   compactIntervalMs?: number;
   /** Close connections that send no valid `hello` within this time, in ms. Defaults to 10 s. */
   helloTimeoutMs?: number;
+  /** What one connection may send; see `DEFAULT_RATE_LIMITS`. */
+  rateLimits?: RateLimits;
+  /** Most characters one note's text may hold. Defaults to the protocol's limit. */
+  maxNoteNodes?: number;
   onError?: HubOptions['onError'];
 }
 
@@ -52,6 +57,8 @@ export function startSyncServer(options: SyncServerOptions): Promise<SyncServer>
     maxMessageBytes,
     ...(options.compactAfterOps === undefined ? {} : { compactAfterOps: options.compactAfterOps }),
     ...(options.helloTimeoutMs === undefined ? {} : { helloTimeoutMs: options.helloTimeoutMs }),
+    ...(options.rateLimits === undefined ? {} : { rateLimits: options.rateLimits }),
+    ...(options.maxNoteNodes === undefined ? {} : { maxNoteNodes: options.maxNoteNodes }),
     ...(options.onError === undefined ? {} : { onError: options.onError }),
   });
   const onError =
@@ -107,8 +114,15 @@ export function startSyncServer(options: SyncServerOptions): Promise<SyncServer>
       },
     });
     ws.on('message', (data, isBinary) => {
-      const bytes = toBytes(data);
-      connection.receive(isBinary ? bytes : bytes.toString('utf8'), isBinary);
+      // The hub does not let a frame throw; this is the last guard, since an exception here would
+      // be uncaught and end the process for every board.
+      try {
+        const bytes = toBytes(data);
+        connection.receive(isBinary ? bytes : bytes.toString('utf8'), isBinary);
+      } catch (error) {
+        onError(error, 'receiving a frame');
+        ws.terminate();
+      }
     });
     // `ws` reports a bad frame (for example one over `maxPayload`) here and then closes the
     // connection itself with the matching code, so the 'close' event below does the cleanup.

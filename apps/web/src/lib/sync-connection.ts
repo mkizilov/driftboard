@@ -6,8 +6,8 @@ import {
   flush,
   openInitiator,
   parseFrame,
+  readBoardOps,
   receive,
-  toBoardOps,
   type Frame,
   type OpStore,
   type Presence,
@@ -92,6 +92,12 @@ export const browserTimers: Timers = {
 export interface SyncConnectionOptions {
   readonly boardId: string;
   readonly replicaId: ReplicaId;
+  /**
+   * A secret for this replica, sent with every `hello`: the server lets a connection replace
+   * this replica's earlier one only if it knows it, so that others cannot push this replica off
+   * the board by saying its id. Made when the replica is, so it lasts as long as the replica.
+   */
+  readonly secret?: string;
   readonly url: string;
   /** Receives the operations that arrive from the server. */
   readonly board: Board;
@@ -144,6 +150,7 @@ export class SyncConnection {
   #disposed = false;
   #state: SyncState;
   #lastError: string | null = null;
+  #quarantined = 0;
 
   constructor(options: SyncConnectionOptions) {
     this.#options = options;
@@ -173,6 +180,15 @@ export class SyncConnection {
   /** Why the last connection ended, if the server or the data were at fault. */
   get lastError(): string | null {
     return this.#lastError;
+  }
+
+  /**
+   * How many operations from the server were set aside instead of applied since this started,
+   * because they were not valid or could not be applied. A server that checks what it relays
+   * never causes this; it is a sign of a damaged disk or of a server that is not to be trusted.
+   */
+  get quarantinedCount(): number {
+    return this.#quarantined;
   }
 
   /** Starts connecting. */
@@ -271,8 +287,9 @@ export class SyncConnection {
   }
 
   #onOpen(): void {
+    const { replicaId, boardId, secret } = this.#options;
     const open = openInitiator(
-      { self: this.#options.replicaId, boardId: this.#options.boardId },
+      { self: replicaId, boardId, ...(secret === undefined ? {} : { token: secret }) },
       this.#store,
     );
     this.#session = open.session;
@@ -289,6 +306,16 @@ export class SyncConnection {
       this.#fail('the server sent a message that is neither text nor bytes');
       return;
     }
+    // Whatever a server sends, it must not throw out of the socket's event handler.
+    try {
+      this.#handle(data);
+    } catch (error) {
+      this.#fail(error instanceof Error ? error.message : 'could not handle a message');
+    }
+  }
+
+  #handle(data: string | ArrayBuffer | Uint8Array): void {
+    if (this.#session === null) return;
     const parsed = parseFrame(data);
     if (!parsed.ok) {
       this.#fail(`the server sent an invalid message: ${parsed.error}`);
@@ -301,12 +328,9 @@ export class SyncConnection {
     this.#trackHeld(step.session);
     if (step.presence !== null) this.#options.onPresence?.(step.presence);
     if (step.applied.length > 0) {
-      try {
-        this.#options.board.applyRemote(toBoardOps(step.applied));
-      } catch (error) {
-        this.#fail(error instanceof Error ? error.message : 'could not apply operations');
-        return;
-      }
+      const { ops, invalid } = readBoardOps(step.applied);
+      const rejected = this.#options.board.applyUntrusted(ops);
+      this.#quarantined += invalid + rejected.length;
     }
     for (const message of step.send) this.#send(encodeFrame(message));
     if (step.peerError !== null) {

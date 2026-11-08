@@ -1,5 +1,6 @@
 import type { AwMapOp } from './aw-map';
 import type { LwwRegister } from './lww-register';
+import { MAX_OP_REFS } from './limits';
 import { isOpId } from './op-id';
 import { assertValidTextOp, type TextOp } from './text-sequence';
 
@@ -49,6 +50,13 @@ export interface BoardChange {
   readonly ops: readonly BoardOp[];
 }
 
+/** An operation from another replica that was set aside instead of applied, and why. */
+export interface QuarantinedOp {
+  /** What was received. Not necessarily a well-formed operation. */
+  readonly op: unknown;
+  readonly reason: string;
+}
+
 /** The note does not exist (never created, or deleted). */
 export class UnknownNoteError extends Error {
   override readonly name = 'UnknownNoteError';
@@ -78,6 +86,7 @@ function assertNoteId(value: unknown): void {
 }
 
 function assertOpIds(ids: readonly unknown[], what: string): void {
+  if (ids.length > MAX_OP_REFS) throw new RangeError(`Too many operation ids in ${what}`);
   for (const id of ids) {
     if (!isOpId(id)) throw new RangeError(`Invalid operation id in ${what}`);
   }
@@ -107,7 +116,8 @@ export function assertValidBoardOp(op: BoardOp): void {
     const inner = op.op;
     assertNoteId(inner.key);
     if (inner.type === 'put') {
-      assertOpIds([inner.dot, ...inner.supersedes], 'put');
+      assertOpIds([inner.dot], 'put');
+      assertOpIds(inner.supersedes, 'put');
       assertValidFields(inner.value);
     } else if (inner.type === 'remove') {
       assertOpIds(inner.dots, 'remove');

@@ -14,6 +14,7 @@ export const MAX_VECTOR_ENTRIES = 1000;
 export const MAX_BOARD_ID_LENGTH = 200;
 export const MAX_NOTE_ID_LENGTH = 200;
 export const MAX_NAME_LENGTH = 80;
+export const MAX_TOKEN_LENGTH = 64;
 
 export const MAX_ERROR_MESSAGE_LENGTH = 500;
 
@@ -28,4 +29,6 @@ export const ERROR_CODES = [
   'out_of_order',
   'conflicting_op',
   'internal_error',
+  /** The connection sent more than it is allowed to; it is closed. */
+  'rate_limited',
 ] as const;

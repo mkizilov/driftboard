@@ -1,4 +1,4 @@
-import { CausalBuffer } from './causal-buffer';
+import { CausalBuffer, type PendingBudget } from './causal-buffer';
 import { compareOpIds, opId, opIdEquals, opIdKey, type OpId } from './op-id';
 import { OrderTree } from './order-tree';
 import { isReplicaId, type ReplicaId } from './replica-id';
@@ -40,6 +40,21 @@ export interface TextDeleteOp {
 }
 
 export type TextOp = TextInsertOp | TextDeleteOp;
+
+/** The text would hold more characters than `maxNodes` allows. */
+export class TextTooLongError extends RangeError {
+  override readonly name = 'TextTooLongError';
+}
+
+export interface TextSequenceOptions {
+  /**
+   * Most characters the sequence may hold, deleted ones included (they stay in memory). An insert
+   * that would go past it, local or remote, is refused with `TextTooLongError`. Default: no limit.
+   */
+  readonly maxNodes?: number;
+  /** Shared limit on the operations held back for missing ones; see `PendingBudget`. */
+  readonly pending?: PendingBudget;
+}
 
 /** One character of the document, including deleted ones (tombstones). */
 export interface TextNode {
@@ -135,11 +150,15 @@ export class TextSequence {
   readonly #buffer: CausalBuffer<TextOp>;
   /** Every node in document order, tombstones included, with counts for index lookups. */
   readonly #order = new OrderTree<CharNode>((node) => node.op.value);
+  readonly #maxNodes: number;
+  readonly #released: TextOp[] = [];
   #counter = 0;
 
-  constructor(replicaId: ReplicaId) {
+  constructor(replicaId: ReplicaId, options: TextSequenceOptions = {}) {
     this.replicaId = replicaId;
+    this.#maxNodes = options.maxNodes ?? Number.POSITIVE_INFINITY;
     this.#buffer = new CausalBuffer<TextOp>({
+      ...(options.pending === undefined ? {} : { budget: options.pending }),
       provides: (op) => (op.type === 'insert' ? op.id : undefined),
       requires: (op) => {
         if (op.type === 'delete') return [op.target];
@@ -152,6 +171,11 @@ export class TextSequence {
   /** Number of visible characters (code points). */
   get length(): number {
     return this.#order.shown;
+  }
+
+  /** Number of characters held, deleted ones (tombstones) included. */
+  get size(): number {
+    return this.#nodes.size;
   }
 
   /** Remote operations held back until the operation they depend on arrives. */
@@ -211,6 +235,8 @@ export class TextSequence {
 
   /** Inserts `text` directly after `origin` in document order (tombstones count). */
   #insertAt(origin: TreeNode, text: string): TextInsertOp[] {
+    // Refuse before changing anything, so that a text that is too long leaves no part of it behind.
+    if (this.#nodes.size + text.length > this.#maxNodes) this.assertRoom([...text].length);
     const ops: TextInsertOp[] = [];
     // Fugue: if `origin` has no right children, the new character becomes its first right child.
     // Otherwise the next node in document order (the leftmost node of that right subtree) has no
@@ -232,7 +258,34 @@ export class TextSequence {
       side = 'right';
       ops.push(op);
     }
+    // An operation from another replica may have referred to one of these ids before it existed.
+    for (const { id } of ops) this.#flushWaiting(id);
     return ops;
+  }
+
+  /**
+   * Applies what was waiting for `id`, which this replica has just written. What cannot be applied
+   * (too many characters) is dropped, as `apply` with `onReject` would drop it.
+   */
+  #flushWaiting(id: OpId): void {
+    this.#buffer.supplied(
+      id,
+      (ready) => {
+        this.#deliver(ready, (applied) => {
+          this.#released.push(applied);
+        });
+      },
+      () => undefined,
+    );
+  }
+
+  /**
+   * The operations from other replicas that were applied because of something this replica wrote
+   * (they had referred to an id it had not made yet), since the last call. The author of a local
+   * edit is told of them here and not in the operations the edit returns, which are its own.
+   */
+  takeReleased(): TextOp[] {
+    return this.#released.splice(0);
   }
 
   /** The node after `origin` in document order, which must exist. */
@@ -267,18 +320,43 @@ export class TextSequence {
    *
    * `onApplied` is called, as it happens, for each operation that changed the sequence: this one
    * and any held ones it released, but not duplicates.
+   *
+   * An operation that cannot be applied (an id reused for a different character, too many
+   * characters, too many operations waiting) makes this throw, unless `onReject` is given: then
+   * that operation goes to `onReject`, with the reason, and the others still go through. Use it
+   * for operations that come from other people. Malformed operations still throw `RangeError`.
    */
-  apply(op: TextOp, onApplied?: (applied: TextOp) => void): void {
+  apply(
+    op: TextOp,
+    onApplied?: (applied: TextOp) => void,
+    onReject?: (rejected: TextOp, error: unknown) => void,
+  ): void {
     assertValidTextOp(op);
-    this.#buffer.receive(op, (ready) => {
-      if (ready.type === 'insert') {
-        const isNew = !this.#nodes.has(opIdKey(ready.id));
-        this.#integrateInsert(ready); // also rejects an id reused for a different character
-        if (isNew) onApplied?.(ready);
-      } else if (this.#integrateDelete(ready)) {
-        onApplied?.(ready);
-      }
-    });
+    this.#buffer.receive(
+      op,
+      (ready) => {
+        this.#deliver(ready, onApplied);
+      },
+      onReject,
+    );
+  }
+
+  /** Applies an operation whose dependency is there. */
+  #deliver(ready: TextOp, onApplied: ((applied: TextOp) => void) | undefined): void {
+    if (ready.type === 'insert') {
+      const isNew = !this.#nodes.has(opIdKey(ready.id));
+      this.#integrateInsert(ready); // also rejects an id reused for a different character
+      if (isNew) onApplied?.(ready);
+    } else if (this.#integrateDelete(ready)) {
+      onApplied?.(ready);
+    }
+  }
+
+  /** Throws `TextTooLongError` unless `count` more characters fit. Changes nothing. */
+  assertRoom(count: number): void {
+    if (this.#nodes.size + count > this.#maxNodes) {
+      throw new TextTooLongError(`a text holds at most ${this.#maxNodes} characters`);
+    }
   }
 
   #integrateInsert(op: TextInsertOp): CharNode {
@@ -290,6 +368,7 @@ export class TextSequence {
     }
     const parent = op.parent === null ? this.#root : this.#nodes.get(opIdKey(op.parent));
     if (parent === undefined) throw new Error('Invariant violated: parent not applied');
+    this.assertRoom(1);
     const node: CharNode = { id: op.id, op, deleted: false, left: [], right: [], leaf: null };
     const siblings = op.side === 'left' ? parent.left : parent.right;
     const position = insertSorted(siblings, node);

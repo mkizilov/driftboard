@@ -9,6 +9,7 @@ import {
   MAX_NAME_LENGTH,
   MAX_NOTE_ID_LENGTH,
   MAX_OPS_PER_MESSAGE,
+  MAX_TOKEN_LENGTH,
   MAX_VECTOR_ENTRIES,
 } from './constants';
 
@@ -48,6 +49,12 @@ export const helloSchema = z
     replicaId: replicaIdSchema,
     boardId: boardIdSchema,
     versionVector: versionVectorSchema,
+    /**
+     * A secret that only this replica's connections know, made when the replica is: another
+     * connection may take the replica's place on the board only if it knows it too, so that
+     * knowing a replica id is not enough to push it off. The server never passes it on.
+     */
+    token: z.string().min(8).max(MAX_TOKEN_LENGTH).optional(),
   })
   .strict();
 

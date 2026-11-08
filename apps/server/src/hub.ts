@@ -16,6 +16,7 @@ import {
   type RoomStep,
 } from '@driftboard/protocol';
 import { isValidBoardId } from './board-id';
+import { DEFAULT_RATE_LIMITS, bucketFor, type RateLimits, type TokenBucket } from './rate-limit';
 import type { BoardStorage } from './storage';
 
 /** WebSocket close codes the hub uses. */
@@ -57,6 +58,12 @@ export interface HubOptions {
   readonly helloTimeoutMs?: number;
   /** Receives errors the hub survives (storage failures); defaults to `console.error`. */
   readonly onError?: (error: unknown, context: string) => void;
+  /** What one connection may send; a connection that sends more is closed. */
+  readonly rateLimits?: RateLimits;
+  /** The clock for the rate limits, in ms. Defaults to `Date.now`. */
+  readonly now?: () => number;
+  /** Most characters one note's text may hold. Defaults to the protocol's limit. */
+  readonly maxNoteNodes?: number;
 }
 
 interface Conn {
@@ -65,6 +72,9 @@ interface Conn {
   live: LiveRoom | null;
   done: boolean;
   timer: ReturnType<typeof setTimeout> | undefined;
+  /** Pays for each message / each operation the connection sends; `undefined` if unlimited. */
+  readonly messages: TokenBucket | undefined;
+  readonly ops: TokenBucket | undefined;
 }
 
 /** A board that has connections: its sync room, kept in memory while anyone is connected. */
@@ -89,8 +99,9 @@ interface LiveRoom {
  *
  * Every frame is checked before it reaches the sync logic: within the size limit, and either JSON
  * text valid against the zod schemas or a binary batch of operations (see `binary.ts` in
- * `@driftboard/protocol`). A connection that sends anything else, or something out of turn, gets
- * one `error` message and is closed.
+ * `@driftboard/protocol`). A connection that sends anything else, or something out of turn, or
+ * more than its rate limits allow, gets one `error` message and is closed. Nothing a connection
+ * sends can throw out of `receive`: an error the hub does not expect closes that connection only.
  */
 export class SyncHub {
   readonly #storage: BoardStorage;
@@ -99,6 +110,9 @@ export class SyncHub {
   readonly #compactAfterOps: number;
   readonly #helloTimeoutMs: number;
   readonly #onError: (error: unknown, context: string) => void;
+  readonly #rateLimits: RateLimits;
+  readonly #now: () => number;
+  readonly #maxNoteNodes: number | undefined;
   readonly #rooms = new Map<string, LiveRoom>();
   readonly #conns = new Set<Conn>();
   #serial = 0;
@@ -109,6 +123,9 @@ export class SyncHub {
     this.#maxMessageBytes = options.maxMessageBytes ?? MAX_FRAME_BYTES;
     this.#compactAfterOps = options.compactAfterOps ?? 1000;
     this.#helloTimeoutMs = options.helloTimeoutMs ?? 10_000;
+    this.#rateLimits = options.rateLimits ?? DEFAULT_RATE_LIMITS;
+    this.#now = options.now ?? Date.now;
+    this.#maxNoteNodes = options.maxNoteNodes;
     this.#onError =
       options.onError ??
       ((error, context) => {
@@ -134,6 +151,8 @@ export class SyncHub {
       live: null,
       done: false,
       timer: undefined,
+      messages: bucketFor(this.#rateLimits.messages, this.#now),
+      ops: bucketFor(this.#rateLimits.ops, this.#now),
     };
     this.#conns.add(conn);
     if (this.#helloTimeoutMs > 0) {
@@ -180,6 +199,19 @@ export class SyncHub {
 
   #receive(conn: Conn, data: string | Uint8Array, isBinary: boolean): void {
     if (conn.done) return;
+    try {
+      this.#check(conn, data, isBinary);
+    } catch (error) {
+      this.#onError(error, 'handling a message');
+      this.#fail(conn, 'internal_error', CLOSE.internalError, 'internal error');
+    }
+  }
+
+  #check(conn: Conn, data: string | Uint8Array, isBinary: boolean): void {
+    if (conn.messages?.take() === false) {
+      this.#fail(conn, 'rate_limited', CLOSE.policyViolation, 'too many messages');
+      return;
+    }
     if (isBinary !== (typeof data !== 'string')) {
       this.#fail(conn, 'invalid_message', CLOSE.unsupportedData, 'frame type and data disagree');
       return;
@@ -196,12 +228,11 @@ export class SyncHub {
       this.#fail(conn, 'invalid_message', closeCode, parsed.error);
       return;
     }
-    try {
-      this.#handle(conn, parsed.message);
-    } catch (error) {
-      this.#onError(error, 'handling a message');
-      this.#fail(conn, 'internal_error', CLOSE.internalError, 'internal error');
+    if (parsed.message.type === 'ops' && conn.ops?.take(parsed.message.ops.length) === false) {
+      this.#fail(conn, 'rate_limited', CLOSE.policyViolation, 'too many operations');
+      return;
     }
+    this.#handle(conn, parsed.message);
   }
 
   #handle(conn: Conn, message: Message): void {
@@ -238,7 +269,12 @@ export class SyncHub {
       const loaded = this.#storage.load(boardId);
       live = {
         boardId,
-        room: createRoom({ serverId: this.#serverId, boardId, store: loaded.store }),
+        room: createRoom({
+          serverId: this.#serverId,
+          boardId,
+          store: loaded.store,
+          ...(this.#maxNoteNodes === undefined ? {} : { maxNoteNodes: this.#maxNoteNodes }),
+        }),
         conns: new Map(),
         tail: loaded.tail,
         compactAt: this.#compactAfterOps,

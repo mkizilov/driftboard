@@ -12,6 +12,8 @@ const server = await startSyncServer({
   compactAfterOps: config.compactAfterOps,
   compactIntervalMs: config.compactIntervalMs,
   helloTimeoutMs: config.helloTimeoutMs,
+  rateLimits: config.rateLimits,
+  maxNoteNodes: config.maxNoteNodes,
 });
 console.log(
   `driftboard server listening on ws://${config.host}:${server.port}/ws (db: ${config.dbPath})`,

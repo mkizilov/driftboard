@@ -3,9 +3,26 @@ import { emptyStore, storeAdd, type OpStore, type StampedOp } from '@driftboard/
 import type { BoardStorage } from './storage';
 
 /**
+ * The longest start of `run` (one origin's operations, numbered from 1 without a gap) that the
+ * store accepts. What it accepts of an origin does not depend on other origins, and a start of an
+ * acceptable run is acceptable, so this can look for the end by halving.
+ */
+function acceptableStart(run: readonly StampedOp[]): readonly StampedOp[] {
+  let good = 0;
+  let bad = run.length;
+  while (bad - good > 1) {
+    const middle = Math.floor((good + bad) / 2);
+    if (storeAdd(emptyStore, run.slice(0, middle)).ok) good = middle;
+    else bad = middle;
+  }
+  return run.slice(0, good);
+}
+
+/**
  * Rebuilds the operation store from what was read from storage. Only an origin's operations 1..n
- * without a gap can be used (the sync layer numbers them that way), so anything after a gap is
- * left out and counted in `dropped`; the server sends it again if it has it. Repeats are ignored.
+ * without a gap, and without one the store refuses (a damaged disk can hold anything), can be used
+ * (the sync layer numbers them that way), so anything after such an operation is left out and
+ * counted in `dropped`; the server sends it again if it has it. Repeats are ignored.
  */
 export function restoreStore(ops: readonly StampedOp[]): { store: OpStore; dropped: number } {
   const byOrigin = new Map<ReplicaId, Map<number, StampedOp>>();
@@ -17,19 +34,28 @@ export function restoreStore(ops: readonly StampedOp[]): { store: OpStore; dropp
     }
     if (!log.has(op.seq)) log.set(op.seq, op);
   }
-  const usable: StampedOp[] = [];
+  let store = emptyStore;
   let distinct = 0;
+  let kept = 0;
   for (const log of byOrigin.values()) {
     distinct += log.size;
+    const run: StampedOp[] = [];
     for (let seq = 1; ; seq += 1) {
       const op = log.get(seq);
       if (op === undefined) break;
-      usable.push(op);
+      run.push(op);
     }
+    let added = storeAdd(store, run);
+    let usable: readonly StampedOp[] = run;
+    if (!added.ok) {
+      usable = acceptableStart(run);
+      added = storeAdd(store, usable);
+    }
+    if (!added.ok) throw new Error(`Invariant violated: ${added.detail}`);
+    store = added.store;
+    kept += usable.length;
   }
-  const added = storeAdd(emptyStore, usable);
-  if (!added.ok) throw new Error(`Invariant violated: ${added.detail}`);
-  return { store: added.store, dropped: distinct - usable.length };
+  return { store, dropped: distinct - kept };
 }
 
 /**

@@ -129,7 +129,7 @@ describe('LwwRegister convergence harness', () => {
     intentArb: fc.integer({ min: 0, max: 9 }),
     idempotentApply: true,
     create: () => LwwRegister.empty<number>(),
-    prepare: (state, value, ctx) => state.prepareSet(value, ctx.clock.tick()),
+    prepare: (state, value, ctx) => [state.prepareSet(value, ctx.clock.tick())],
     apply: (state, op) => state.apply(op),
     merge: (x, y) => x.merge(y),
     observe: (ctx, op) => {

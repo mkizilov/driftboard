@@ -236,11 +236,14 @@ describe('AwMap convergence harness', () => {
     idempotentApply: true,
     create: () => AwMap.empty<Value>((x, y) => x.merge(y)),
     prepare: (state, intent, ctx) => {
-      if (intent.kind === 'remove') return state.prepareRemove(intent.key);
+      if (intent.kind === 'remove') {
+        const remove = state.prepareRemove(intent.key);
+        return remove === undefined ? [] : [remove];
+      }
       // Read-modify-write: the new value builds on what this replica currently sees for the key.
       const current = state.get(intent.key) ?? LwwRegister.empty<number>();
       const next = current.apply(current.prepareSet(intent.value, ctx.clock.tick()));
-      return state.prepareSet(ctx.replicaId, intent.key, next);
+      return [state.prepareSet(ctx.replicaId, intent.key, next)];
     },
     apply: (state, op) => state.apply(op),
     merge: (x, y) => x.merge(y),

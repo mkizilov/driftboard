@@ -14,7 +14,7 @@ const setSpec: CheckableSpec<readonly number[], number, number> = {
   intentArb: fc.integer({ min: 0, max: 6 }),
   idempotentApply: true,
   create: () => [],
-  prepare: (_state, value) => value,
+  prepare: (_state, value) => [value],
   apply: (state, value) => unionOf(state, [value]),
   merge: unionOf,
   snapshot: (state) => state,
@@ -25,7 +25,7 @@ const counterSpec: CheckableSpec<number, number, number> = {
   name: 'counter',
   intentArb: fc.integer({ min: 1, max: 5 }),
   create: () => 0,
-  prepare: (_state, amount) => amount,
+  prepare: (_state, amount) => [amount],
   apply: (state, amount) => state + amount,
   snapshot: (state) => state,
 };
@@ -52,7 +52,7 @@ describe('checkConvergence', () => {
       name: 'arrival-order register',
       intentArb: fc.integer({ min: 0, max: 9 }),
       create: () => null,
-      prepare: (_state, value) => value,
+      prepare: (_state, value) => [value],
       apply: (_state, value) => value,
       snapshot: (state) => state,
     };
@@ -79,16 +79,19 @@ describe('checkConvergence', () => {
       id: string;
       deps: readonly string[];
     }
-    // Every op names everything its origin had applied; applying it early is a harness bug.
+    // Every op names everything its origin had applied (and each prepare yields two ops, the
+    // second naming the first); applying one early is a harness bug.
     const probe: CheckableSpec<readonly string[], Op, null> = {
       name: 'causal order probe',
       intentArb: fc.constant(null),
       idempotentApply: true,
       create: () => [],
-      prepare: (state, _intent, ctx) => ({
-        id: `${ctx.replicaId}:${state.filter((id) => id.startsWith(`${ctx.replicaId}:`)).length}`,
-        deps: state,
-      }),
+      prepare: (state, _intent, ctx) => {
+        const own = state.filter((id) => id.startsWith(`${ctx.replicaId}:`)).length;
+        const first = { id: `${ctx.replicaId}:${own}`, deps: state };
+        const second = { id: `${ctx.replicaId}:${own + 1}`, deps: [...state, first.id] };
+        return [first, second];
+      },
       apply: (state, op) => {
         if (state.includes(op.id)) return state;
         const missing = op.deps.filter((dep) => !state.includes(dep));
@@ -100,8 +103,51 @@ describe('checkConvergence', () => {
     expect(checkConvergence(probe, { numRuns: 300 }).concurrentPairs).toBeGreaterThan(0);
   });
 
+  it('uses 3 to 5 replicas when asked to and rejects other ranges', () => {
+    const wide = checkConvergence(setSpec, { numRuns: 100, replicas: { min: 3, max: 5 } });
+    expect(wide.maxReplicas).toBe(5);
+    expect(checkConvergence(setSpec, { numRuns: 20 }).maxReplicas).toBe(3);
+    expect(() => checkConvergence(setSpec, { replicas: { min: 2, max: 4 } })).toThrow(RangeError);
+    expect(() => checkConvergence(setSpec, { replicas: { min: 3, max: 6 } })).toThrow(RangeError);
+    const tooFew = { replicas: 2, steps: [], flushPicks: [], mergePicks: [] };
+    expect(() => runScenario(setSpec, tooFew)).toThrow(RangeError);
+  });
+
+  it('supports states that apply operations in place', () => {
+    const inPlaceSet: CheckableSpec<Set<number>, number, number> = {
+      name: 'in-place set',
+      intentArb: fc.integer({ min: 0, max: 6 }),
+      idempotentApply: true,
+      create: () => new Set<number>(),
+      prepare: (_state, value) => [value],
+      apply: (state, value) => state.add(value),
+      snapshot: (state) => [...state].sort((p, q) => p - q),
+    };
+    expect(checkConvergence(inPlaceSet, { numRuns: 200 }).redeliveries).toBeGreaterThan(0);
+
+    // A mutable state must not fool the redelivery check by being compared with itself.
+    const inPlaceCounter: CheckableSpec<{ total: number }, number, number> = {
+      name: 'in-place counter',
+      intentArb: fc.integer({ min: 1, max: 5 }),
+      idempotentApply: true,
+      create: () => ({ total: 0 }),
+      prepare: (_state, amount) => [amount],
+      apply: (state, amount) => {
+        state.total += amount;
+        return state;
+      },
+      snapshot: (state) => state.total,
+    };
+    expect(() => checkConvergence(inPlaceCounter, { numRuns: 300 })).toThrow(/redelivering/);
+  });
+
   it('runScenario handles an empty scenario', () => {
-    const stats = runScenario(setSpec, { steps: [], flushPicks: [], mergePicks: [[0, 0, 0]] });
+    const stats = runScenario(setSpec, {
+      replicas: 3,
+      steps: [],
+      flushPicks: [],
+      mergePicks: [[0, 0, 0]],
+    });
     expect(stats).toEqual({ ops: 0, concurrentPairs: 0, redeliveries: 0, mergeChecks: 1 });
   });
 });

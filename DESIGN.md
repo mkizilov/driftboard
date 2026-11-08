@@ -34,7 +34,7 @@ Board  = AddWinsMap<NoteId, Note>
 Note   = {
   position: LwwRegister<{ x: number; y: number }>,   // one register: x and y never tear apart
   color:    LwwRegister<Color>,
-  text:     RgaSequence<string>                       // one element per code point
+  text:     TextSequence                              // one element per code point
 }
 ```
 
@@ -56,8 +56,8 @@ Semantics worth stating up front:
 All types live in `packages/crdt` and are pure: time comes from an injected `Clock`, randomness and
 replica ids are passed in, and there is no I/O. Each type supports merge/apply that is
 commutative, associative and idempotent, which is verified with fast-check property tests.
-Identifiers, clocks, version vectors, the LWW register and the add-wins map are implemented; the RGA
-sequence below is **[planned]**.
+Identifiers, clocks, version vectors, the LWW register, the add-wins map and the text sequence are
+implemented.
 
 ### Identifiers and clocks **[implemented]**
 
@@ -148,8 +148,9 @@ example `LwwRegister.merge`.
   (checked by the convergence harness below).
 - **Value size.** Every write carries its whole value, so values should be small join-able states
   (for example a record of LWW registers for `position` and `color`). The text sequence is a large
-  structure; how it hangs off a note (most likely a separate per-note structure whose visibility is
-  governed by the map's presence) is **[open]** until the sequence CRDT exists.
+  mutable structure and does not fit that shape; the plan is one `TextSequence` per note, kept
+  beside the map, whose visibility follows the map's presence. Wiring the board together is
+  **[planned]**.
 - Nothing is ever compacted yet: the version vector grows with the number of replicas that wrote.
   **[planned]**
 
@@ -158,10 +159,12 @@ example `LwwRegister.merge`.
 Source: `packages/crdt/src/convergence.ts` (fast-check wrapper) and `convergence-scenario.ts` (the
 runner, which has no test-framework imports). Test-only; not exported from the package.
 
-A CRDT plugs in through a `ConvergenceSpec`: `create`, `prepare` (turn a random intent into an
-operation using the replica's state and clock), `apply`, `snapshot` (canonical JSON of the *entire*
-state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. `checkConvergence(spec,
-{ numRuns = 1000 })` then generates random scenarios on 3 replicas:
+A CRDT plugs in through a `ConvergenceSpec`: `create`, `prepare` (turn a random intent into a list
+of operations using the replica's state and clock), `apply`, `snapshot` (canonical JSON of the
+*entire* state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. States may
+be mutated in place by `apply` (the text sequence does this); such a spec must have an idempotent
+`apply`, and cannot use `merge`. `checkConvergence(spec, { numRuns = 1000, replicas })` then
+generates random scenarios on 3 replicas, or on 3 to 5 with `replicas: { min: 3, max: 5 }`:
 
 - local operations, with the replicas' physical clocks randomly advanced or moved backwards;
 - deliveries of single operations to a replica, chosen at random among those that are *causally
@@ -169,26 +172,83 @@ state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. 
 - redeliveries of already-applied operations (only if `idempotentApply`);
 - a final drain of the remaining operations in a random causally valid order.
 
-It fails unless all three replicas end with the snapshot of a reference replica that applied the
+It fails unless all replicas end with the snapshot of a reference replica that applied the
 operations in creation order; redelivery never changes a snapshot; and, if `merge` is given, merging
 recorded intermediate states is commutative, associative, idempotent and equal to replaying the
 union of their operations. `checkConvergence` returns totals (operations, concurrent pairs,
 redeliveries, merge checks) so tests can assert that runs were not vacuous. `convergence.test.ts`
 checks the harness itself against deliberately broken CRDTs.
 
-### RGA-style sequence (text)
+### Text sequence: RGA-style, using the Fugue tree **[implemented]**
 
-Replicated Growable Array. Each element has a unique id (an HLC timestamp), a value and a
-tombstone flag.
+Source: `packages/crdt/src/text-sequence.ts` (`TextSequence`) and `causal-buffer.ts`.
 
-- `insert(after: ElementId | start, value)` creates an element whose id is a fresh HLC timestamp.
-  Elements inserted after the same predecessor are ordered by descending id, so concurrent inserts
-  at the same position land in the same order on every replica.
-- `delete(id)` sets the tombstone; deletes are idempotent and commute with inserts.
-- An operation whose predecessor has not arrived yet is buffered and applied when it does.
-- Tombstones are retained until causally stable. **[planned]**
-- Operations are small, id-addressed records; the same logic produces the full-state form used for
-  snapshots.
+The sequence starts from the RGA idea (every character has a unique id and names the character it
+was inserted next to; deletes leave tombstones) but uses the Fugue tree, because plain RGA
+interleaves concurrent words in one common case (see "Interleaving" below).
+
+- **Model.** A tree of nodes, one per Unicode code point, plus a virtual start node. A node has an
+  `OpId` (the creating replica's next insert counter, so ids are unique and per-replica contiguous),
+  a `parent` and a `side` (`left` or `right`), a value, and a tombstone flag. The document is the
+  in-order walk of the tree: a node's left children, the node itself, its right children. Children
+  on the same side are ordered by ascending `OpId`. The start node only has right children.
+- **Operations** are immutable data: `insert { id, parent | null, side, value }` and
+  `delete { target }`. Where a character ends up is fixed by its operation alone, so any delivery
+  order that respects the dependencies below gives the same tree. Applying an insert twice is a
+  no-op; reusing an id for a different character throws `RangeError`.
+- **Local insert** at index `i` (Fugue's rule). Let `origin` be the visible character before the
+  insertion point (or the start). If `origin` has no right children (tombstones count), the new
+  character becomes its first right child. Otherwise the next node in document order, which is the
+  leftmost node of origin's right subtree and so has no left children, gets the new character as
+  its first left child. Either way the character lands directly after `origin`. The remaining
+  characters of an `insert(index, text)` call each become the right child of the previous one, so a
+  run of typing is a chain.
+- **Local delete** only sets tombstones; the tree does not change, so later inserts can still refer
+  to deleted characters. Tombstones are kept forever for now; dropping them once causally stable is
+  **[planned]**.
+- **API.** `insert(index, text)` and `delete(index, length)` apply locally and return the
+  operations to send; `apply(op)` takes remote (or echoed) operations; `toString()`, `length`,
+  `nodes()` (the whole tree in document order, for snapshots and tests) and `pendingCount`. Indices
+  count code points (not UTF-16 units, not grapheme clusters). The replica is a mutable object while
+  its operations are immutable. The document order is rebuilt lazily with an explicit stack, so an
+  edit after a change costs O(n) and very long runs cannot overflow the call stack.
+- **Causal delivery buffer.** `CausalBuffer` is a small generic class: `apply` sends every operation
+  through it. An insert requires its parent, a delete requires its target. An operation whose
+  requirement has not arrived is parked under that one missing id and applied, together with
+  whatever it unblocks and parents before children, as soon as the missing operation is applied.
+  Duplicates are harmless. The buffer has no size limit or timeout; `pendingCount` lets the sync
+  layer notice a stuck stream and ask for the missing operations again.
+
+#### Interleaving
+
+Question checked: two replicas concurrently type a word at the same position. Each character must
+not be mixed in with the other word's characters.
+
+- **Plain RGA** (insert after a predecessor, siblings by descending id) keeps *forward* typing
+  together: each character is inserted after the one typed before it, so a word is a chain and a
+  chain is one subtree. It fails for *backward* typing (a word typed right to left, or any run where
+  the cursor stays put): every character is inserted after the same predecessor, so the characters
+  of both words are siblings and the id order mixes them. Typing `c b a` and `z y x` at the start
+  gives ids `A1 c, A2 b, A3 a` and `B1 z, B2 y, B3 x`; descending order gives `xaybzc`. The
+  "why the sequence is not plain RGA" tests reproduce this with a 15-line RGA model.
+- **Fugue** puts backward-typed characters on the *left* side: after the first character, each new
+  one lands directly before the previous one, which makes it the previous one's left child (the
+  insert rule above, with `origin` = the character before the cursor, whose right subtree now
+  starts with the previous character). So a backward run is a chain of left children and a forward
+  run a chain of right children. Either way the only siblings are the *first* characters of the
+  concurrent runs, ordered by id, and each run is a whole subtree that stays contiguous:
+  `[alphaOMEGA]` or `[OMEGAalpha]`, never a mix. The word whose first character has the smaller id
+  comes first.
+- **Tested** (`text-sequence.test.ts`): forward and backward in all four combinations, at the start,
+  in the middle, at the end and in empty text; words inserted with one `insert` call; three
+  simultaneous words; words typed next to tombstones; a fast-check property over random bases,
+  positions, word lengths and directions for 2 and 3 replicas; and the convergence harness (below).
+  The harness also checks that every local edit has exactly the intended effect on the text and that
+  a remote operation never reorders existing characters.
+- **Not claimed.** This is the base Fugue tree with siblings ordered by id. Fugue's
+  "maximally non-interleaving" guarantee (the `FugueMax` variant, which also orders siblings by their
+  right origin) is not implemented, and nothing here is promised for edit patterns other than
+  contiguous typing runs, for example two users alternately typing and moving their cursors.
 
 ## Sync protocol (outline)
 

@@ -6,6 +6,8 @@ export type {
   AwMapPutOp,
   AwMapRemoveOp,
 } from './aw-map';
+export { CausalBuffer } from './causal-buffer';
+export type { CausalBufferOptions } from './causal-buffer';
 export { createManualClock } from './clock';
 export type { Clock, ManualClock } from './clock';
 export {
@@ -28,5 +30,13 @@ export type { LamportTimestamp, OpId } from './op-id';
 export type { Ordering } from './ordering';
 export { compareReplicaIds, generateReplicaId, isReplicaId, replicaId } from './replica-id';
 export type { ReplicaId } from './replica-id';
+export { TextSequence } from './text-sequence';
+export type {
+  TextDeleteOp,
+  TextInsertOp,
+  TextNode,
+  TextOp,
+  TextSide,
+} from './text-sequence';
 export { VersionVector } from './version-vector';
 export type { VersionVectorOrder } from './version-vector';

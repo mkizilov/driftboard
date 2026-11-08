@@ -1,5 +1,8 @@
-import { PROTOCOL_VERSION, encodeMessage, parseClientMessage } from '@driftboard/protocol';
+import { PROTOCOL_VERSION, encodeMessage, parseMessage } from '@driftboard/protocol';
+import { replicaId } from '@driftboard/crdt';
 import { WebSocketServer } from 'ws';
+
+const SERVER_REPLICA_ID = replicaId('server');
 
 export interface SyncServer {
   port: number;
@@ -17,14 +20,25 @@ export function startSyncServer({ host, port }: SyncServerOptions): Promise<Sync
 
     wss.on('connection', (socket) => {
       socket.on('message', (data) => {
-        const parsed = parseClientMessage(data.toString());
+        const parsed = parseMessage(data.toString());
         if (!parsed.ok) {
           socket.send(
             encodeMessage({ type: 'error', code: 'invalid_message', message: parsed.error }),
           );
           return;
         }
-        socket.send(encodeMessage({ type: 'welcome', version: PROTOCOL_VERSION }));
+        // Handshake only: the server is not yet wired to the sync room, so it holds no operations.
+        if (parsed.message.type === 'hello') {
+          socket.send(
+            encodeMessage({
+              type: 'hello',
+              version: PROTOCOL_VERSION,
+              replicaId: SERVER_REPLICA_ID,
+              boardId: parsed.message.boardId,
+              versionVector: [],
+            }),
+          );
+        }
       });
     });
 

@@ -1,64 +1,169 @@
+import { replicaId } from '@driftboard/crdt';
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
+  MAX_FRAME_BYTES,
+  MAX_OPS_PER_MESSAGE,
+  MAX_SELECTION,
   PROTOCOL_VERSION,
   encodeMessage,
-  parseClientMessage,
-  parseServerMessage,
-  type ClientMessage,
-  type ServerMessage,
-} from './messages';
+  parseMessage,
+  type Message,
+} from './index';
+import { stamped } from './test-support';
 
-const hello: ClientMessage = {
+const a = replicaId('a');
+const b = replicaId('b');
+
+const hello: Message = {
   type: 'hello',
   version: PROTOCOL_VERSION,
+  replicaId: a,
   boardId: 'board-1',
-  clientId: 'client-1',
+  versionVector: [
+    [a, 3],
+    [b, 1],
+  ],
 };
 
-describe('client messages', () => {
-  it('round-trips a hello', () => {
-    expect(parseClientMessage(encodeMessage(hello))).toEqual({ ok: true, message: hello });
-  });
+const messages: Message[] = [
+  hello,
+  { type: 'hello', version: PROTOCOL_VERSION, replicaId: b, boardId: 'x', versionVector: [] },
+  { type: 'ops', ops: stamped(a, 1, 3) },
+  { type: 'ack', versionVector: [[a, 3]] },
+  {
+    type: 'presence',
+    replicaId: a,
+    state: { cursor: { x: 1.5, y: -2 }, selection: ['1@a', '2@b'], name: 'Ada' },
+  },
+  { type: 'presence', replicaId: a, state: { cursor: null, selection: [] } },
+  { type: 'presence', replicaId: a, state: null },
+  { type: 'error', code: 'out_of_order', message: 'expected operation 4 from a' },
+];
 
-  it('rejects invalid JSON', () => {
-    expect(parseClientMessage('{nope')).toEqual({ ok: false, error: 'not valid JSON' });
-  });
+/** `message` as the JSON object a peer would send, changed by `change`. */
+function altered(message: Message, change: (json: Record<string, unknown>) => void): string {
+  const json = JSON.parse(encodeMessage(message)) as Record<string, unknown>;
+  change(json);
+  return JSON.stringify(json);
+}
 
-  it('rejects unknown types, wrong versions, empty ids and extra fields', () => {
-    const bad = [
-      { ...hello, type: 'goodbye' },
-      { ...hello, version: PROTOCOL_VERSION + 1 },
-      { ...hello, boardId: '' },
-      { ...hello, extra: true },
-    ];
-    for (const message of bad) {
-      expect(parseClientMessage(JSON.stringify(message)).ok).toBe(false);
+describe('message parsing', () => {
+  it('round-trips every kind of message', () => {
+    for (const message of messages) {
+      expect(parseMessage(encodeMessage(message))).toEqual({ ok: true, message });
     }
   });
 
-  it('never throws on arbitrary input', () => {
+  it('rejects text that is not a message', () => {
+    for (const raw of ['', '{', 'null', '[]', '"hello"', '42', '{}', '{"type":"bogus"}']) {
+      expect(parseMessage(raw).ok).toBe(false);
+    }
+    expect(parseMessage('{'.repeat(10))).toEqual({ ok: false, error: 'not valid JSON' });
+    expect(parseMessage('x'.repeat(MAX_FRAME_BYTES + 1))).toEqual({
+      ok: false,
+      error: 'frame too large',
+    });
+  });
+
+  it('never throws, whatever it is given', () => {
     fc.assert(
       fc.property(fc.string(), (raw) => {
-        expect(typeof parseClientMessage(raw).ok).toBe('boolean');
-      }),
-    );
-    fc.assert(
-      fc.property(fc.json(), (raw) => {
-        expect(typeof parseClientMessage(raw).ok).toBe('boolean');
+        expect(typeof parseMessage(raw).ok).toBe('boolean');
       }),
     );
   });
-});
 
-describe('server messages', () => {
-  it('round-trips welcome and error', () => {
-    const messages: ServerMessage[] = [
-      { type: 'welcome', version: PROTOCOL_VERSION },
-      { type: 'error', code: 'invalid_message', message: 'bad' },
-    ];
+  it('rejects unknown fields on every message', () => {
     for (const message of messages) {
-      expect(parseServerMessage(encodeMessage(message))).toEqual({ ok: true, message });
+      const text = altered(message, (json) => {
+        json['extra'] = 1;
+      });
+      expect(parseMessage(text).ok).toBe(false);
     }
+  });
+
+  it('accepts any positive hello version, so a mismatch can be answered with an error', () => {
+    const future = altered(hello, (json) => {
+      json['version'] = PROTOCOL_VERSION + 41;
+    });
+    expect(parseMessage(future).ok).toBe(true);
+    for (const version of [0, -1, 1.5, '1', null]) {
+      const bad = altered(hello, (json) => {
+        json['version'] = version;
+      });
+      expect(parseMessage(bad).ok).toBe(false);
+    }
+  });
+
+  describe('rejects', () => {
+    const cases: [string, Message, (json: Record<string, unknown>) => void][] = [
+      ['an empty board id', hello, (j) => (j['boardId'] = '')],
+      ['a board id that is too long', hello, (j) => (j['boardId'] = 'b'.repeat(201))],
+      ['an invalid replica id', hello, (j) => (j['replicaId'] = 'not valid')],
+      ['a version vector that is not a list', hello, (j) => (j['versionVector'] = {})],
+      ['a vector entry with a zero count', hello, (j) => (j['versionVector'] = [['a', 0]])],
+      ['a vector entry with a fractional count', hello, (j) => (j['versionVector'] = [['a', 1.5]])],
+      ['a replica twice in the vector', hello, (j) => (j['versionVector'] = [['a', 1], ['a', 2]])],
+      ['a vector entry with a bad replica id', hello, (j) => (j['versionVector'] = [['a b', 1]])],
+      ['a missing version vector', hello, (j) => delete j['versionVector']],
+    ];
+    for (const [name, message, change] of cases) {
+      it(name, () => {
+        expect(parseMessage(altered(message, change)).ok).toBe(false);
+      });
+    }
+  });
+
+  describe('rejects bad operations', () => {
+    const ops: Message = { type: 'ops', ops: stamped(a, 1, 2) };
+    const first = (json: Record<string, unknown>) => (json['ops'] as Record<string, unknown>[])[0];
+    const cases: [string, (json: Record<string, unknown>) => void][] = [
+      ['an empty batch', (j) => (j['ops'] = [])],
+      [
+        'a batch that is too large',
+        (j) => (j['ops'] = Array.from({ length: MAX_OPS_PER_MESSAGE + 1 }, () => first(j))),
+      ],
+      ['a sequence number of 0', (j) => (first(j)!['seq'] = 0)],
+      ['a fractional sequence number', (j) => (first(j)!['seq'] = 1.5)],
+      ['an origin that is not a replica id', (j) => (first(j)!['origin'] = 'x y')],
+      ['a payload that is not an object', (j) => (first(j)!['op'] = 'text')],
+      ['a missing payload', (j) => delete first(j)!['op']],
+      ['an unknown field on an operation', (j) => (first(j)!['extra'] = true)],
+    ];
+    for (const [name, change] of cases) {
+      it(name, () => {
+        expect(parseMessage(altered(ops, change)).ok).toBe(false);
+      });
+    }
+  });
+
+  describe('rejects bad presence and errors', () => {
+    const presence = messages[4] as Message;
+    const state = (json: Record<string, unknown>) => json['state'] as Record<string, unknown>;
+    it('a selection that is too long', () => {
+      const text = altered(presence, (j) => {
+        state(j)['selection'] = Array.from({ length: MAX_SELECTION + 1 }, (_, i) => `n${i}`);
+      });
+      expect(parseMessage(text).ok).toBe(false);
+    });
+    it('a cursor without coordinates, or with text coordinates', () => {
+      for (const cursor of [{}, { x: 1 }, { x: '1', y: 2 }, { x: 1, y: 2, z: 3 }, 5]) {
+        const text = altered(presence, (j) => {
+          state(j)['cursor'] = cursor;
+        });
+        expect(parseMessage(text).ok).toBe(false);
+      }
+    });
+    it('an empty note id in the selection, or a name that is too long', () => {
+      const emptyId = altered(presence, (j) => (state(j)['selection'] = ['']));
+      expect(parseMessage(emptyId).ok).toBe(false);
+      const longName = altered(presence, (j) => (state(j)['name'] = 'n'.repeat(81)));
+      expect(parseMessage(longName).ok).toBe(false);
+    });
+    it('an unknown error code', () => {
+      const error = messages[7] as Message;
+      expect(parseMessage(altered(error, (j) => (j['code'] = 'whoops'))).ok).toBe(false);
+    });
   });
 });

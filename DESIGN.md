@@ -319,38 +319,92 @@ and `board-json.ts` (JSON).
   The harness also checks that every local call has exactly the intended effect on what the board
   shows.
 
-## Sync protocol (outline)
+## Sync protocol **[implemented as pure logic; the WebSocket server and client are planned]**
 
-Transport: one WebSocket per client per board, JSON text frames. Every frame is validated with zod
-on receipt; invalid frames get an `error` reply and never reach application code. Every message
-has a `type` discriminator, and the handshake carries a protocol `version`.
+Source: `packages/protocol/src`. `messages.ts` (zod schemas, parse/encode), `ops.ts` and `store.ts`
+(stamped operations and the operation store), `sync.ts` (one connection's state machine), `room.ts`
+(the server side for one board). Nothing there sends, stores or times anything: every function takes
+state and returns the next state, the messages to send and the operations that are new.
 
-| Message   | Direction       | Purpose                                                              | Status     |
-| --------- | --------------- | -------------------------------------------------------------------- | ---------- |
-| `hello`   | client → server | Open a session: `version`, `boardId`, `clientId`.                    | scaffolded |
-| `welcome` | server → client | Accept the session and confirm protocol `version`.                   | scaffolded |
-| `error`   | server → client | Reject a frame: `code` (`invalid_message`) and `message`.            | scaffolded |
-| `hello` + `since` | client → server | Resume point: highest server sequence number the client has seen. | planned |
-| `push`    | client → server | A batch of CRDT operations from the client's outbox.                 | planned    |
-| `ack`     | server → client | Operation ids durably stored by the server.                          | planned    |
-| `ops`     | server → client | Operations the client has not seen, with the new `cursor`.           | planned    |
-| `presence`| both            | Ephemeral cursors/selection; never persisted.                        | planned    |
+**Transport.** One WebSocket per client per board, JSON text frames of at most 1 MiB. Every frame is
+parsed with zod (`parseMessage`, which never throws); an invalid frame gets an `error` and never
+reaches application code.
 
-Planned behaviour:
+**Operation identity.** The author of an operation stamps it with `(origin, seq)`: its own replica id
+and a number counting that replica's operations 1, 2, 3, ... without gaps (`authorOps`). A
+version vector `origin -> count` therefore says exactly which operations a replica holds, and "the
+operations a peer is missing" is "everything beyond its vector". The stamp is separate from the
+board's own ids, so the sync layer does not look inside operations; the payload is the board
+operation's JSON form (`board-json.ts`). Operations of one origin travel in order; operations of
+different origins may arrive in any order because `Board.applyRemote` tolerates that.
 
-1. The server keeps an append-only **operation log** per board in SQLite
-   (`ops(board_id, seq, op_id UNIQUE, payload)`), under `./.data/`. `seq` is assigned by the server
-   and only orders delivery; it plays no part in conflict resolution.
-2. On connect the client sends `hello` with its `since` cursor. The server replies with `welcome`
-   followed by every operation after that cursor.
-3. The client sends local operations in `push` batches. The server de-duplicates by `op_id`,
-   appends new operations, `ack`s them, and relays them to the board's other connections.
-4. Operations are idempotent and commute, so duplicates, reordering and re-delivery after a
-   reconnect are harmless. Correctness never depends on server ordering.
-5. Periodic snapshots bound log replay time and catch-up cost for new clients. **[planned]**
+| Message | Fields | Purpose |
+| --- | --- | --- |
+| `hello` | `version`, `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
+| `ops` | `ops: [{ origin, seq, op }]`, 1 to 500 | A batch of operations the receiver is missing. |
+| `ack` | `versionVector` | "I hold everything this covers." Sent after receiving operations that were new. |
+| `presence` | `replicaId`, `state: { cursor, selection, name? } \| null` | Ephemeral cursor and selection, relayed, never stored. `null` means the replica left. |
+| `error` | `code`, `message` | A protocol violation; the sender then closes the connection. |
 
-Authentication, authorisation and multi-board access control are out of scope for now; the server
-binds to loopback by default.
+Error codes: `invalid_message`, `unsupported_version`, `wrong_board`, `unexpected_message`
+(for example `ops` before `hello`), `out_of_order` (an operation skips ahead of its origin's stream)
+and `conflicting_op` (a different operation under an origin and number already stored).
+
+**Connecting.** Each side sends its version vector and the other answers with exactly the
+operations beyond it:
+
+1. The client opens with `hello` carrying its vector.
+2. The server replies with its own `hello` and one or more `ops` messages with exactly the
+   operations the client lacks. A repeated `hello` on the same connection is ignored.
+3. The client, on the server's `hello`, sends `ops` with exactly the operations the server lacks.
+4. Each side applies what it received (`applied` in the result of `receive`) to its board and acks.
+
+**Staying in sync.** A session keeps `sent`, the operations the peer is known to hold: it starts as the
+vector in the peer's `hello`, and grows with every operation sent to the peer, every operation
+received from it (it holds what it sent) and every `ack`. `flush(session, store)` sends the
+operations beyond `sent` and moves `sent` forward. Anything that may have added operations to the
+store (an edit, a received batch) is followed by `flush` on each session, so each operation is sent
+to a peer once per connection and never back to the peer it came from. The server's `Room` does this
+for every other session when a client's operations arrive, which is also how it relays.
+
+**After a disconnect.** Whatever was in flight is lost, and neither side can know how much arrived.
+The next connection starts with `hello`, whose vector is the authoritative record of what each side
+holds, so exactly what was lost is sent again and nothing else. There is no separate outbox or
+resend timer: a client's unsent operations are simply the ones its server vector does not cover.
+A client that lost its own store gets its operations back from the server and numbers on from them.
+
+**No operation is sent twice.** Within one connection `sent` only grows and `flush` only sends what is
+beyond it, so a repeated send is impossible; across connections the peer's `hello` replaces the
+guess with the truth. Duplicated messages are harmless: a repeated `hello` is ignored, repeated
+operations are recognised by `(origin, seq)`, stored once, not acked and not relayed. The server
+treats a second connection of the same replica id as the old one coming back and drops the old
+session.
+
+**Validation.** `receive` checks every operation payload in depth (`BoardFormatError` rules from the
+board JSON), stores it in canonical form, and rejects the whole batch, leaving the store unchanged,
+for a bad payload, a gap or a conflict. A client may only send presence for itself.
+
+**Presence.** Relayed to the other ready sessions, not stored. When a client's connection ends the
+server relays `state: null` for it.
+
+**Tested** (`packages/protocol/src/*.test.ts`): schemas and malformed input; the store (gaps,
+conflicts, duplicates, versions that share storage) against a plain model; the handshake, live
+sync, violations and presence of `sync.ts`; `Room` with several clients, reconnects, replaced
+sessions and bad clients; and `simulation.test.ts`, a simulated network of 3 clients and a server
+with random edits, disconnects, reconnects, the server noticing a dead connection late, and
+duplicated messages in flight. Messages travel as JSON text through the real encoder and parser.
+Every run must converge (same operations, same board snapshot as a reference replay, nothing left
+to send, every session synced) and, while it runs, no operation may be sent twice on a connection,
+no original message may carry an operation its receiver already holds, and nobody may send an
+error. Without faults every operation crosses exactly one link up and one link down per other
+client; a reconnect sends exactly the missing operations.
+
+**Not yet:** the server persists nothing (`Room.applied` is what to store, and `createRoom({ store })`
+how to load it; a table keyed by `(board_id, origin, seq)` fits), `apps/server` only answers a
+`hello` so far, there is no client-side wiring, operations are never compacted, and replica ids
+must be unique per device and tab (two live tabs sharing one id would write conflicting streams;
+`conflicting_op` catches that only when the operations differ). Authentication, authorisation and
+multi-board access control are out of scope for now; the server binds to loopback by default.
 
 ## Offline-first approach
 
@@ -358,10 +412,12 @@ binds to loopback by default.
   only. Edits apply immediately and never wait on the network or on acknowledgements.
 - **Durable local storage.** The replica (state plus outbox) is persisted in the browser
   (IndexedDB) so a reload or crash while offline loses nothing. **[planned]**
-- **Outbox.** Every local operation is queued until the server `ack`s its id. After a
-  disconnect the unacked outbox is resent in full; idempotence makes that safe.
-- **Reconnect.** The client reconnects with capped exponential backoff and jitter, then resumes
-  from its `since` cursor. Going offline is a normal state, not an error.
+- **Outbox.** There is no separate queue: every local operation is stamped and kept in the
+  replica's store, and the ones the server lacks are exactly the ones its `hello` vector does not
+  cover. After a disconnect nothing is resent blindly (see "Sync protocol"). **[logic implemented]**
+- **Reconnect.** The client reconnects with capped exponential backoff and jitter and opens with
+  `hello`; the vectors decide what is sent. Going offline is a normal state, not an error.
+  **[planned: the client wiring]**
 - **Merge on reconnect.** Remote operations are applied to the local replica with the same
   functions used for local edits, so offline edits made by several people converge without a manual
   merge step.

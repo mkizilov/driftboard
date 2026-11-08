@@ -2,7 +2,7 @@
   "name": "@driftboard/protocol",
   "version": "0.0.0",
   "private": true,
-  "description": "Sync protocol message types for driftboard, validated with zod.",
+  "description": "Sync protocol for driftboard: zod-validated messages and the pure sync logic.",
   "type": "module",
   "exports": {
     ".": "./src/index.ts"
@@ -12,6 +12,7 @@
     "test": "vitest run"
   },
   "dependencies": {
+    "@driftboard/crdt": "workspace:*",
     "zod": "3.24.1"
   },
   "devDependencies": {

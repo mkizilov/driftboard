@@ -1,4 +1,5 @@
-import { PROTOCOL_VERSION, encodeMessage, parseServerMessage } from '@driftboard/protocol';
+import { replicaId } from '@driftboard/crdt';
+import { PROTOCOL_VERSION, encodeMessage, parseMessage } from '@driftboard/protocol';
 import { afterEach, beforeEach, describe, expect, it } from 'vitest';
 import WebSocket from 'ws';
 import { startSyncServer, type SyncServer } from './server';
@@ -28,19 +29,31 @@ function exchange(payload: string): Promise<string> {
 }
 
 describe('sync server', () => {
-  it('answers a valid hello with welcome', async () => {
+  it('answers a valid hello with its own hello', async () => {
     const reply = await exchange(
-      encodeMessage({ type: 'hello', version: PROTOCOL_VERSION, boardId: 'b', clientId: 'c' }),
+      encodeMessage({
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        replicaId: replicaId('client-1'),
+        boardId: 'board-1',
+        versionVector: [],
+      }),
     );
-    expect(parseServerMessage(reply)).toEqual({
+    expect(parseMessage(reply)).toEqual({
       ok: true,
-      message: { type: 'welcome', version: PROTOCOL_VERSION },
+      message: {
+        type: 'hello',
+        version: PROTOCOL_VERSION,
+        replicaId: 'server',
+        boardId: 'board-1',
+        versionVector: [],
+      },
     });
   });
 
   it('answers garbage with an error message', async () => {
     const reply = await exchange('not json');
-    const parsed = parseServerMessage(reply);
+    const parsed = parseMessage(reply);
     expect(parsed.ok && parsed.message.type).toBe('error');
   });
 });

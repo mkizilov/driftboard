@@ -1,66 +1,134 @@
+import { isReplicaId, type ReplicaId } from '@driftboard/crdt';
 import { z } from 'zod';
+import {
+  ERROR_CODES,
+  MAX_BOARD_ID_LENGTH,
+  MAX_ERROR_MESSAGE_LENGTH,
+  MAX_FRAME_BYTES,
+  MAX_NAME_LENGTH,
+  MAX_NOTE_ID_LENGTH,
+  MAX_OPS_PER_MESSAGE,
+  MAX_SELECTION,
+  MAX_VECTOR_ENTRIES,
+} from './constants';
 
-export const PROTOCOL_VERSION = 1;
+const replicaIdSchema = z.custom<ReplicaId>((value) => isReplicaId(value), 'Invalid replica id');
+const boardIdSchema = z.string().min(1).max(MAX_BOARD_ID_LENGTH);
+const noteIdSchema = z.string().min(1).max(MAX_NOTE_ID_LENGTH);
+const counterSchema = z.number().int().min(1).max(Number.MAX_SAFE_INTEGER);
 
-const nonEmpty = z.string().min(1);
+/** A version vector on the wire: `[replicaId, count]` pairs, each replica at most once, no zeros. */
+export const versionVectorSchema = z
+  .array(z.tuple([replicaIdSchema, counterSchema]))
+  .max(MAX_VECTOR_ENTRIES)
+  .refine(
+    (entries) => new Set(entries.map(([replica]) => replica)).size === entries.length,
+    'A replica appears twice in the version vector',
+  );
+
+/**
+ * One operation as it travels: the replica that authored it, that replica's sequence number for it
+ * (1, 2, 3, ... without gaps) and the board operation in its JSON form (see `board-json.ts` in
+ * `@driftboard/crdt`). Only the envelope is checked here; the sync logic checks the payload in
+ * depth and stores it in canonical form.
+ */
+export const stampedOpSchema = z
+  .object({
+    origin: replicaIdSchema,
+    seq: counterSchema,
+    op: z.record(z.string(), z.unknown()),
+  })
+  .strict();
 
 export const helloSchema = z
   .object({
     type: z.literal('hello'),
-    version: z.literal(PROTOCOL_VERSION),
-    boardId: nonEmpty,
-    clientId: nonEmpty,
+    /** Not restricted here, so that a mismatch can be answered with `unsupported_version`. */
+    version: z.number().int().min(1),
+    replicaId: replicaIdSchema,
+    boardId: boardIdSchema,
+    versionVector: versionVectorSchema,
   })
   .strict();
 
-export const welcomeSchema = z
+export const opsSchema = z
   .object({
-    type: z.literal('welcome'),
-    version: z.literal(PROTOCOL_VERSION),
+    type: z.literal('ops'),
+    ops: z.array(stampedOpSchema).min(1).max(MAX_OPS_PER_MESSAGE),
+  })
+  .strict();
+
+/** "I hold every operation this vector covers." */
+export const ackSchema = z
+  .object({ type: z.literal('ack'), versionVector: versionVectorSchema })
+  .strict();
+
+export const presenceStateSchema = z
+  .object({
+    cursor: z
+      .object({ x: z.number().finite(), y: z.number().finite() })
+      .strict()
+      .nullable(),
+    selection: z.array(noteIdSchema).max(MAX_SELECTION),
+    name: z.string().max(MAX_NAME_LENGTH).optional(),
+  })
+  .strict();
+
+/** `state: null` means the replica has left (or cleared its presence). */
+export const presenceSchema = z
+  .object({
+    type: z.literal('presence'),
+    replicaId: replicaIdSchema,
+    state: presenceStateSchema.nullable(),
   })
   .strict();
 
 export const errorSchema = z
   .object({
     type: z.literal('error'),
-    code: z.enum(['invalid_message']),
-    message: z.string(),
+    code: z.enum(ERROR_CODES),
+    message: z.string().max(MAX_ERROR_MESSAGE_LENGTH),
   })
   .strict();
 
-export const clientMessageSchema = z.discriminatedUnion('type', [helloSchema]);
-export const serverMessageSchema = z.discriminatedUnion('type', [welcomeSchema, errorSchema]);
+/** Every message either side can send. */
+export const messageSchema = z.discriminatedUnion('type', [
+  helloSchema,
+  opsSchema,
+  ackSchema,
+  presenceSchema,
+  errorSchema,
+]);
 
+export type WireOp = z.infer<typeof stampedOpSchema>;
 export type Hello = z.infer<typeof helloSchema>;
-export type Welcome = z.infer<typeof welcomeSchema>;
+export type Ops = z.infer<typeof opsSchema>;
+export type Ack = z.infer<typeof ackSchema>;
+export type PresenceState = z.infer<typeof presenceStateSchema>;
+export type Presence = z.infer<typeof presenceSchema>;
 export type ErrorMessage = z.infer<typeof errorSchema>;
-export type ClientMessage = z.infer<typeof clientMessageSchema>;
-export type ServerMessage = z.infer<typeof serverMessageSchema>;
+export type ErrorCode = ErrorMessage['code'];
+export type Message = z.infer<typeof messageSchema>;
 
 export type ParseResult<T> = { ok: true; message: T } | { ok: false; error: string };
 
-function parseJson<T>(schema: z.ZodType<T, z.ZodTypeDef, unknown>, raw: string): ParseResult<T> {
+/** Parses one text frame. Never throws. */
+export function parseMessage(raw: string): ParseResult<Message> {
+  if (raw.length > MAX_FRAME_BYTES) return { ok: false, error: 'frame too large' };
   let json: unknown;
   try {
     json = JSON.parse(raw);
   } catch {
     return { ok: false, error: 'not valid JSON' };
   }
-  const result = schema.safeParse(json);
+  const result = messageSchema.safeParse(json);
   if (!result.success) {
-    return { ok: false, error: result.error.issues.map((i) => i.message).join('; ') };
+    const issues = result.error.issues.map((issue) => `${issue.path.join('.')}: ${issue.message}`);
+    return { ok: false, error: issues.join('; ').slice(0, MAX_ERROR_MESSAGE_LENGTH) };
   }
   return { ok: true, message: result.data };
 }
 
-export function parseClientMessage(raw: string): ParseResult<ClientMessage> {
-  return parseJson(clientMessageSchema, raw);
-}
-
-export function parseServerMessage(raw: string): ParseResult<ServerMessage> {
-  return parseJson(serverMessageSchema, raw);
-}
-
-export function encodeMessage(message: ClientMessage | ServerMessage): string {
+export function encodeMessage(message: Message): string {
   return JSON.stringify(message);
 }

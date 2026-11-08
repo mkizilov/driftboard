@@ -56,9 +56,15 @@ Run from the repository root. Use pnpm through corepack (`corepack enable`); the
 | `pnpm e2e:install`  | Install Playwright's Chromium into the project (`PLAYWRIGHT_BROWSERS_PATH=0`). Once.                                                                    |
 | `pnpm e2e`          | Playwright E2E suite: builds the web app, starts both servers, runs the specs (one worker, a few minutes).                                              |
 | `pnpm check:all`    | `pnpm check && pnpm e2e`: the full local gate.                                                                                                          |
+| `pnpm start:prod`   | Build the web app for production and serve it, the WebSocket and `/healthz` from the Node server on one port (22100).                                   |
 
 Dev servers: `pnpm --filter @driftboard/server dev` (ws://127.0.0.1:22100/ws, `GET /healthz`) and
 `pnpm --filter @driftboard/web dev` (http://127.0.0.1:22101). Use only loopback ports 22100–22199.
+
+Production: `pnpm start:prod`, or `mkdir -p .data && docker compose up --build` (published on
+http://127.0.0.1:22160, databases in `./.data/`). The server's settings are the `DRIFTBOARD_*`
+variables listed in `README.md`; the web app is built for production with `VITE_SYNC_URL=/ws` (the
+page connects back to its own origin).
 
 Playwright's browser lives in the project: `pnpm e2e:install` and `pnpm e2e` both set
 `PLAYWRIGHT_BROWSERS_PATH=0`. The suite uses ports 22150 (sync server) and 22151 (web preview), so it
@@ -88,7 +94,7 @@ disable those rules.
 
 ## Definition of done (every task)
 
-1. `pnpm check` passes (and `pnpm check:all` once E2E exists).
+1. `pnpm check` passes (and `pnpm check:all`, which includes the end-to-end suite).
 2. New code has tests.
 3. Docs are updated (`DESIGN.md`, this file, README) when behaviour or commands change.
 4. Give a short summary: what changed, checks actually run, remaining limitations.
@@ -104,8 +110,8 @@ no pnpm; `.agent-local/env.sh` puts them first on `PATH` and points HOME and the
 `pnpm-lock.yaml` was generated and committed, CI now installs with `--frozen-lockfile`, and
 everything ran on the real packages for the first time.
 
-What now runs for real and passes: `pnpm test` in every package (CRDT 349 tests, protocol 176, server
-107 including `server.test.ts` over real `ws` and better-sqlite3 and the fuzz test, web 518 including
+What now runs for real and passes: `pnpm test` in every package (CRDT 369 tests, protocol 176, server
+119 including `server.test.ts` over real `ws` and better-sqlite3 and the fuzz test, web 520 including
 the component tests on React 18 with jsdom and `storage.test.ts` on fake-indexeddb, bench scenarios
 15, e2e helpers 96), `tsc --noEmit` in every package, ESLint and Prettier. That first run found and
 fixed real defects of the earlier turns (commit `c005fec`): `IdbBoardStorage.write` left half a
@@ -115,34 +121,32 @@ that was deleted under it, the bench package's Vitest `benchmark` option was in 
 In the turn-14 commit the first real `pnpm build` of the web app failed (and so would `pnpm e2e`):
 `virtual:pwa-register` imports `workbox-window`, which the app did not declare; it does now.
 
+**End-to-end (`e2e`, turn 12), first real run in turn 15: all 15 specs passed (46 s)**, including the
+200-action monkey test, going offline with `context.setOffline`, killing and restarting the server
+mid-typing, and reloads. The browser is installed with `pnpm e2e:install` (it lands in
+`node_modules`, which is ignored). The production page was also driven by hand in headless Chromium
+against `pnpm start:prod` and against the assembled container layout (create a board, add a note,
+type, a second context sees it, concurrent typing merges, reload; and, with the service worker
+allowed, a reload and a cold second tab with the network cut still show the board). Those hand checks
+are throwaway scripts and are not part of the repository.
+
 Still unverified:
 
-- **The `e2e` package (turn 12): no spec has ever run.** Its Chromium is not installed (`pnpm e2e:install`
-  has not been run here) and the sandbox has no browser, so not one browser context was
-  opened, and neither the production web build under `vite preview`, nor the real server started by
-  the `syncServer` fixture, nor `context.setOffline` against the real page has been seen working
-  together. What ran: the Vitest unit tests of the pure helpers in `e2e/support/` and the TypeScript
-  check of the whole package. The pinned `@playwright/test` 1.49.1 installs. Things most likely to
-  need a fix on the first real run, in this order: the selectors and geometry in `support/person.ts`
-  (the header grab point `HEADER_GRAB_X`, `elementFromPoint` checks, forced double-click), the
-  `webServer` command in `playwright.config.ts` (`vite build/preview --outDir ../../e2e/dist/web`),
-  `node --import tsx` starting `apps/server/src/main.ts`, timing in the restart tests (reconnect
-  backoff is up to 15 s; `SYNC_TIMEOUT_MS` is 30 s), and the exact-text assertions in
-  `concurrent-typing.spec.ts` and `offline.spec.ts`, which rely on `lib/caret.ts` keeping a caret in
-  place when text is inserted before it (a failure there is a finding about the app, not the test).
-  The suite goes over binary frames and, since turn 14, sends a connection secret in `hello`. Run
-  `pnpm e2e:install` once, then `pnpm e2e`; the monkey test prints its seed in its title and attaches
-  its plan and per-action report.
-- **Nothing has been seen in a browser**: the `.tsx` files are covered by the component tests only.
-  Whether the app installs and opens offline has to be checked by hand: build the web app, serve it
-  with `preview` (port 22102), then DevTools > Application; and presence by opening one board in two
-  browsers.
+- **The `Dockerfile` and `docker-compose.yml` were never built or run**: Docker was not available.
+  Their stages were reproduced as plain commands from the lockfile (see `DESIGN.md`, "Production
+  build and container"), which covers the dependency set and the layout, not the syntax of the files,
+  the base image, `apt-get`, the cache mount, the health check or the compose options. Build them with
+  `docker compose up --build` and fix what that shows.
+- Browsers other than Chromium, a phone, Safari and Firefox; a real network.
 - `pnpm bench` (`vitest bench`) has not been run. `pnpm bench:report` has, on Node 22.12.
 - The numbers in `PERFORMANCE.md` were measured on Node 26.13; a re-run on Node 22.12 after turn 14
   was within about 15% of them on every scenario (not a controlled comparison).
 
-Turn 14 (security and robustness) is described in `DESIGN.md`, "Security and robustness". Its tests
-run on the real tools, and so do the fuzz tests (`packages/protocol/src/fuzz.test.ts` against a
-`Room`; `apps/server/src/fuzz.test.ts` over real sockets on port 22140), which found two real
-problems while they were written. The e2e ports 22150 and 22151 and the server tests' 22110-22139
-do not overlap with the fuzz test's 22140.
+Turn 14 (security and robustness) is described in `DESIGN.md`, "Security and robustness", and turn
+15 (production build, README, review of `packages/crdt`) in "Production build and container" and in
+`CRDT-REVIEW.md`, whose cases are tests in `packages/crdt/src/review.test.ts`. The README's CRDT
+examples are tests too (`packages/crdt/src/readme-examples.test.ts`): change one with the other. The
+fuzz tests (`packages/protocol/src/fuzz.test.ts` against a `Room`; `apps/server/src/fuzz.test.ts` over
+real sockets on port 22140) found two real problems while they were written. Test ports: the server's
+WebSocket tests 22110-22139, its fuzz test 22140, its static-file tests 22141-22149, the e2e suite
+22150 and 22151, `docker compose` 22160.

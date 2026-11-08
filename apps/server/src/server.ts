@@ -4,6 +4,7 @@ import type Database from 'better-sqlite3';
 import WebSocket, { WebSocketServer } from 'ws';
 import { SyncHub, type HubOptions } from './hub';
 import type { RateLimits } from './rate-limit';
+import { serveStatic, type StaticFiles } from './static';
 import { BoardStorage } from './storage';
 
 /** Clients connect to `ws://host:port/ws`. */
@@ -25,6 +26,11 @@ export interface SyncServerOptions {
   helloTimeoutMs?: number;
   /** What one connection may send; see `DEFAULT_RATE_LIMITS`. */
   rateLimits?: RateLimits;
+  /**
+   * A built web app (`apps/web/dist`) to serve from the same port, with `index.html` for the routes
+   * of the app. Without it the server only has `/healthz` and the WebSocket.
+   */
+  staticDir?: string;
   /** Most characters one note's text may hold. Defaults to the protocol's limit. */
   maxNoteNodes?: number;
   onError?: HubOptions['onError'];
@@ -49,7 +55,10 @@ function json(res: ServerResponse, status: number, body: unknown): void {
   res.end(JSON.stringify(body));
 }
 
-export function startSyncServer(options: SyncServerOptions): Promise<SyncServer> {
+export async function startSyncServer(options: SyncServerOptions): Promise<SyncServer> {
+  // Before anything is opened: a directory that is not a build is a mistake to report, not to serve.
+  const files: StaticFiles | undefined =
+    options.staticDir === undefined ? undefined : await serveStatic(options.staticDir);
   const maxMessageBytes = options.maxMessageBytes ?? MAX_FRAME_BYTES;
   const storage = new BoardStorage(options.db);
   const hub = new SyncHub({
@@ -70,7 +79,16 @@ export function startSyncServer(options: SyncServerOptions): Promise<SyncServer>
   const http = createServer((req: IncomingMessage, res: ServerResponse) => {
     const path = (req.url ?? '').split('?')[0];
     if (path !== HEALTH_PATH) {
-      res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
+      if (files === undefined) {
+        res.writeHead(404, { 'Content-Type': 'text/plain' }).end('not found');
+        return;
+      }
+      files.handle(req, res).catch((error: unknown) => {
+        onError(error, `serving ${path ?? ''}`);
+        // Once the headers are out there is no status left to send: cut the response off.
+        if (res.headersSent) res.destroy();
+        else res.writeHead(500, { 'Content-Type': 'text/plain' }).end('error');
+      });
       return;
     }
     if (req.method !== 'GET' && req.method !== 'HEAD') {

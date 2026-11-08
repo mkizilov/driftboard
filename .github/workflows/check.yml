@@ -26,3 +26,33 @@ jobs:
         with:
           name: e2e-results
           path: e2e/test-results
+
+  # The Dockerfile has only ever been reproduced as plain commands (no Docker where it was written):
+  # this is where it is built and run for real.
+  image:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build the image
+        run: docker build --target runtime --tag driftboard:ci .
+      - name: Run it and look at it
+        run: |
+          mkdir -p .data
+          docker run --detach --name driftboard --user "$(id -u):$(id -g)" \
+            --publish 127.0.0.1:22160:22100 --volume "$PWD/.data:/data" driftboard:ci
+          for attempt in $(seq 1 30); do
+            curl --fail --silent http://127.0.0.1:22160/healthz && break
+            sleep 1
+          done
+          curl --fail --silent http://127.0.0.1:22160/healthz
+          curl --fail --silent http://127.0.0.1:22160/ | grep --quiet '<title>driftboard</title>'
+          curl --fail --silent http://127.0.0.1:22160/b/abcdefghijklmnopqrstuv | grep --quiet 'assets/'
+          docker logs driftboard
+      - name: The container's own health check agrees
+        run: |
+          for attempt in $(seq 1 20); do
+            [ "$(docker inspect --format '{{.State.Health.Status}}' driftboard)" = healthy ] && exit 0
+            sleep 3
+          done
+          docker inspect --format '{{json .State.Health}}' driftboard
+          exit 1

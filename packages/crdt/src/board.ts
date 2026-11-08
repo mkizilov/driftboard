@@ -5,6 +5,7 @@ import {
   assertColor,
   assertCoordinate,
   assertValidBoardOp,
+  plainZero,
   type BoardChange,
   type BoardOp,
   type NoteColor,
@@ -265,8 +266,8 @@ export class Board {
     this.#sequence(id).assertRoom(countPoints(text)); // before anything changes
     const at = this.#hlc.tick();
     const fields: NoteFields = {
-      x: written(LwwRegister.empty<number>(), x, at),
-      y: written(LwwRegister.empty<number>(), y, at),
+      x: written(LwwRegister.empty<number>(), plainZero(x), at),
+      y: written(LwwRegister.empty<number>(), plainZero(y), at),
       z: written(LwwRegister.empty<number>(), this.#topZ() + 1, at),
       color: written(LwwRegister.empty<NoteColor>(), color, at),
     };
@@ -282,7 +283,11 @@ export class Board {
     assertCoordinate(y, 'y');
     const fields = this.#require(noteId);
     const at = this.#hlc.tick();
-    const moved = { ...fields, x: written(fields.x, x, at), y: written(fields.y, y, at) };
+    const moved = {
+      ...fields,
+      x: written(fields.x, plainZero(x), at),
+      y: written(fields.y, plainZero(y), at),
+    };
     return this.#write(noteId, moved);
   }
 
@@ -524,7 +529,14 @@ export class Board {
       if (at !== undefined && (latest === undefined || compareHlc(at, latest) > 0)) latest = at;
     }
     if (latest !== undefined && compareHlc(latest, this.#hlc.latest) > 0) {
-      this.#hlc.receive(latest);
+      // Advisory: it only keeps later local timestamps above this one. The write is applied already,
+      // and a timestamp the clock cannot move past (its logical counter is at the largest there is)
+      // must not make this replica differ from the ones whose clocks could.
+      try {
+        this.#hlc.receive(latest);
+      } catch {
+        // Left as it was; `receive` changes nothing when it fails.
+      }
     }
   }
 

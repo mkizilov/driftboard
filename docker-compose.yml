@@ -1,0 +1,40 @@
+# driftboard on this machine:  docker compose up --build   (then open http://127.0.0.1:22160)
+#
+# The page, the WebSocket and /healthz are on one port. It is published on the loopback interface
+# only: put a reverse proxy with TLS in front of it to share it, and do not publish it directly.
+# The boards are SQLite files in ./.data/ (create it first with `mkdir -p .data`, so that it is yours
+# and not root's), which survive `docker compose down`.
+#
+# Settings, all optional (a .env file next to this one, or the environment):
+#   DRIFTBOARD_HOST_PORT  the port on this machine, 22160; keep it within 22100-22199
+#   DRIFTBOARD_UID/GID    who the server runs as and so who owns the files in ./.data, 1000
+#
+# The limits and the rest of the server's settings are the DRIFTBOARD_* variables described in
+# README.md; add them under `environment` to change them.
+
+name: driftboard
+
+services:
+  driftboard:
+    build:
+      context: .
+      target: runtime
+    image: driftboard:local
+    init: true
+    restart: unless-stopped
+    user: '${DRIFTBOARD_UID:-1000}:${DRIFTBOARD_GID:-1000}'
+    ports:
+      - '127.0.0.1:${DRIFTBOARD_HOST_PORT:-22160}:22100'
+    environment:
+      DRIFTBOARD_DB: /data/driftboard.sqlite
+    volumes:
+      - ./.data:/data
+    # Nothing needs to write anywhere else than the volume (tsx keeps a cache in /tmp).
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    stop_grace_period: 10s

@@ -10,6 +10,7 @@
   "scripts": {
     "dev": "tsx watch src/main.ts",
     "start": "tsx src/main.ts",
+    "start:prod": "NODE_ENV=production DRIFTBOARD_STATIC_DIR=${DRIFTBOARD_STATIC_DIR:-../web/dist} node --import tsx src/main.ts",
     "typecheck": "tsc --noEmit",
     "test": "vitest run"
   },
@@ -17,6 +18,7 @@
     "@driftboard/crdt": "workspace:*",
     "@driftboard/protocol": "workspace:*",
     "better-sqlite3": "11.7.0",
+    "tsx": "4.19.2",
     "ws": "8.18.0"
   },
   "devDependencies": {
@@ -24,7 +26,6 @@
     "@types/node": "22.10.2",
     "@types/ws": "8.5.13",
     "fast-check": "3.23.1",
-    "tsx": "4.19.2",
     "typescript": "5.7.2",
     "vitest": "2.1.8"
   }

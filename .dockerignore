@@ -1,0 +1,20 @@
+# What a build of the image does not need, and what must never end up in one.
+.git
+.github
+.agent-local
+.cortexkit
+.opencode
+.tools
+.toolchain
+.venv
+_opam
+.data
+.pnpm-store
+**/node_modules
+**/dist
+**/coverage
+**/test-results
+**/playwright-report
+**/*.tsbuildinfo
+**/*.log
+.DS_Store

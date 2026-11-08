@@ -14,6 +14,8 @@ export interface ServerConfig {
   rateLimits: RateLimits;
   /** Most characters (deleted ones included) one note's text may hold. */
   maxNoteNodes: number;
+  /** A built web app to serve from the same port; `undefined` serves no files. */
+  staticDir: string | undefined;
 }
 
 // apps/server/src -> repository root; SQLite files live under <root>/.data/.
@@ -30,6 +32,14 @@ function integer(env: NodeJS.ProcessEnv, name: string, fallback: number, min: nu
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
+  const maxNoteNodes = integer(env, 'DRIFTBOARD_MAX_NOTE_NODES', MAX_NOTE_NODES, 1);
+  if (maxNoteNodes > MAX_NOTE_NODES) {
+    // Clients refuse characters past MAX_NOTE_NODES, and which ones they refuse depends on the order
+    // they arrive in: a server that lets more through would make clients disagree.
+    throw new Error(
+      `Invalid DRIFTBOARD_MAX_NOTE_NODES: ${maxNoteNodes} is more than the ${MAX_NOTE_NODES} the clients accept`,
+    );
+  }
   const port = integer(env, 'DRIFTBOARD_PORT', 22100, 0);
   if (port > 65535) throw new Error(`Invalid DRIFTBOARD_PORT: ${env['DRIFTBOARD_PORT']}`);
   return {
@@ -65,6 +75,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): ServerConfig {
         ),
       },
     },
-    maxNoteNodes: integer(env, 'DRIFTBOARD_MAX_NOTE_NODES', MAX_NOTE_NODES, 1),
+    maxNoteNodes,
+    // Relative to where the server is started. Empty means none.
+    staticDir: env['DRIFTBOARD_STATIC_DIR'] === '' ? undefined : env['DRIFTBOARD_STATIC_DIR'],
   };
 }

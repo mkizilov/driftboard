@@ -2,6 +2,7 @@ import type { AwMapOp } from './aw-map';
 import {
   BoardFormatError,
   assertValidBoardOp,
+  plainZero,
   type BoardOp,
   type NoteColor,
   type NoteFields,
@@ -113,9 +114,10 @@ function opIdsFrom(value: unknown, what: string): OpId[] {
 function registerFrom<T extends number | string>(value: unknown, what: string): LwwRegister<T> {
   const entry = asObject(value, what);
   const register = LwwRegister.empty<T>();
+  const written = entry['value'];
   return register.apply({
     type: 'set',
-    value: entry['value'] as T,
+    value: (typeof written === 'number' ? plainZero(written) : written) as T,
     timestamp: parseHlc(asString(entry['at'], `${what}.at`)),
   });
 }

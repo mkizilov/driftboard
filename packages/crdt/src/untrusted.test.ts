@@ -146,6 +146,28 @@ describe('CausalBuffer with a budget', () => {
     expect(budget.used).toBe(1);
   });
 
+  it('with reject, still goes ahead with what waits for an operation whose apply threw after it took effect', () => {
+    const known = new Set<string>();
+    const applied: number[] = [];
+    const rejected: number[] = [];
+    const buffer = new CausalBuffer<TestOp>({
+      provides: (o) => o.id,
+      requires: (o) => o.needs,
+      isApplied: (dep) => known.has(opIdKey(dep)),
+    });
+    const apply = (ready: TestOp) => {
+      known.add(opIdKey(ready.id));
+      applied.push(ready.id.counter);
+      if (ready.id.counter === 1) throw new Error('failed once it was done');
+    };
+    const reject = (o: TestOp) => rejected.push(o.id.counter);
+    buffer.receive(top(2, 1), apply, reject);
+    buffer.receive(top(1), apply, reject);
+    expect(applied).toEqual([1, 2]);
+    expect(rejected).toEqual([1]);
+    expect(buffer.size).toBe(0);
+  });
+
   it('with reject, a failing apply does not hold up the operations released with it', () => {
     const applied: number[] = [];
     const rejected: number[] = [];

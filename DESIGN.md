@@ -726,11 +726,14 @@ the replica's own).
   of a replica that is not connected. If that replica later returns, its next operation conflicts
   with theirs and its connection is closed; the web client takes a new replica on every page load, so
   in practice only the unsent operations of an earlier page load can be affected, not the page.
-- **Operations that wait for ids that never come.** An operation may refer to an id of another
-  origin that does not exist, and is accepted because it may only be late. It waits at every client,
-  up to the budget of 250,000, after which later operations that must wait are quarantined (a reload
+- **Operations that wait for others are capped at 250,000.** An operation may refer to an id of
+  another origin that does not exist, and is accepted because it may only be late. It waits at every
+  client, up to the budget, after which later operations that must wait are quarantined (a reload
   clears the buffer). The refusal of what waits for a refused operation, and the per-origin rules,
-  keep this from growing by itself.
+  keep this from growing by itself. The budget can also be reached by an honest client that loads a
+  board of hundreds of thousands of operations by several authors from scratch, because the server
+  sends operations sorted by replica id and not in the order they were written; a reload then gives
+  the same refusals. Sending them in arrival order would fix it. See `CRDT-REVIEW.md`, O2.
 - **A note's text cannot be shortened.** Characters stay in memory as tombstones and count against
   the 100,000, so a note that has been edited a very great deal stops accepting text. Collecting
   tombstones is in `PERFORMANCE.md`; it is not done.
@@ -768,8 +771,6 @@ The fuzz tests found two real problems while they were written, both fixed and b
 the tests above: the release of waiting operations by a local write, and a `hello` that pushed a
 replica off the board. A mutation check of the protections (23 deliberate bugs, one at a time, each in
 the code that holds the rule) was caught by the tests in all 23 cases.
-
-## Web client **[implemented]**
 
 ## Web client **[implemented]**
 
@@ -977,7 +978,7 @@ the browser may evict it under storage pressure (`navigator.storage.persist()` i
 Presence is not stored. A dead connection is noticed by the browser's `offline` event or by the
 socket closing; there is no heartbeat on either side yet.
 
-## End-to-end tests **[implemented; not yet run, see AGENTS.md]**
+## End-to-end tests **[implemented; all 15 specs pass]**
 
 The unit and component tests cover the pieces; the `e2e` package (`@driftboard/e2e`) checks the
 whole: the real sync server, the production build of the web app and real browsers, with the claim
@@ -1033,15 +1034,68 @@ the product makes, that everyone ends with the same board.
   stand-in server).
 
 **Not covered.** Chromium only. The service worker and offline _page loads_ (the PWA) are not
-exercised, because the suite blocks service workers; offline here means a loaded page that loses its
-network. Presence (cursors, who is editing) is not asserted. A server that comes back with an empty
-database is not tried. There are no retries: a failure is a finding.
+exercised by the suite, because it blocks service workers; offline here means a loaded page that
+loses its network. They were checked by hand against the production server (the worker registers and
+takes control, a reload and a second tab opened offline both show the board, and reconnecting goes
+back to _Online_), which is not an automated test. Presence (cursors, who is editing) is not
+asserted. A server that comes back with an empty database is not tried. There are no retries: a
+failure is a finding.
+
+## Production build and container **[implemented; the container files were not built here]**
+
+- **Same origin.** `pnpm --filter @driftboard/web build:prod` builds with `VITE_SYNC_URL=/ws`, which
+  `syncUrl` reads as "this path on the origin that served the page" (`ws` or `wss` to match). The
+  page therefore connects back to the server it came from, whatever port or reverse proxy is in
+  front of it. The development build still defaults to port 22100 of the same host.
+- **Static files** (`apps/server/src/static.ts`, enabled by `DRIFTBOARD_STATIC_DIR`). The server
+  serves the built web app from the port of the WebSocket: `GET` and `HEAD` only; files under the
+  directory, with the real path of each checked to be inside the real directory (so `..`, encoded
+  dots, NUL bytes and symlinks that point out all fail); `index.html` for any path without a file
+  name (the client-side route `/b/:boardId`), and a 404 for a missing path _with_ a name (a script
+  that is gone must not come back as HTML); `Cache-Control: public, max-age=31536000, immutable` for
+  `/assets/` (hashed names) and `no-cache` for everything else, so that the page, `sw.js` and the
+  manifest are always revalidated (weak ETags, `304`); and on every response `X-Content-Type-Options:
+nosniff`, `Referrer-Policy: no-referrer` (the board id is in the address and is the key to the
+  board) and a Content-Security-Policy that allows only the app's own files, its own origin and
+  `ws:`/`wss:`. It starts only if the directory has an `index.html`. There is no compression and no
+  TLS: for those, put a reverse proxy in front. `/healthz` and `/ws` are handled first and are not
+  affected.
+- **`pnpm start:prod`** = `build:prod` for the web app, then `NODE_ENV=production
+DRIFTBOARD_STATIC_DIR=../web/dist node --import tsx src/main.ts` in `apps/server`. `tsx` is a
+  runtime dependency of the server for this reason: the workspace packages are TypeScript that is
+  read from source, there is no library build.
+- **`Dockerfile`**, four stages. `base` has Node 22.12 (the pinned version), corepack's pnpm and only
+  the manifests (so the install layer is rebuilt when dependencies change and not when sources
+  do). `web-build` installs what the web app needs (`--filter "@driftboard/web..."`, from the
+  lockfile) and runs `build:prod`. `server-deps` installs only the server's production dependencies
+  (`--prod --filter "@driftboard/server..."`: 46 packages, no test or lint tools). `runtime` is a
+  plain Node image with that `node_modules`, the sources of the server and the two workspace
+  packages it uses, and the built web app, running as the `node` user with the databases in the
+  volume `/data`, a health check on `/healthz`, and `CMD node --import tsx src/main.ts`. A cache
+  mount keeps the pnpm store out of the image; `better-sqlite3` has prebuilt binaries for the usual
+  platforms and the `native` stage has the compiler for the others.
+- **`docker-compose.yml`** runs that image with the container port published on `127.0.0.1:22160`
+  only, `./.data` bind-mounted at `/data`, `init: true`, a read-only root file system (`/tmp` is a
+  tmpfs, where `tsx` keeps its cache), all capabilities dropped and `no-new-privileges`. The user is
+  `DRIFTBOARD_UID`/`DRIFTBOARD_GID`, 1000 by default, so that the files in `./.data` are the person's
+  and not root's.
+- **What was verified, and how.** Docker was not available, so the files were not built. Instead,
+  each stage was reproduced in a scratch directory as the same commands on the same inputs: the
+  filtered installs with `--frozen-lockfile` from the committed lockfile, `build:prod`, the layout
+  of the runtime stage, and the server started from it exactly as `CMD` does with the image's
+  environment variables; the page was then driven in headless Chromium (create a board, add a note,
+  type, a second browser context sees it, concurrent typing merges, reload) and the database files
+  appeared in the data directory. That checks the dependency story and the layout, which are the
+  likeliest things to be wrong, but not the Dockerfile's syntax, the base image, the `apt-get` step,
+  the cache mount, the health check or the compose options.
 
 ## Local-only environment
 
 Everything runs inside the repository folder: Node is pinned in `.nvmrc` and `engines`, pnpm is
 pinned by the `packageManager` field and run through corepack, the pnpm store is `./.pnpm-store`,
 SQLite databases live in `./.data/`, and Playwright's Chromium is installed into the project with
-`PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Dev servers use loopback ports 22100–22199 (sync
-server 22100, Vite dev server 22101, Vite preview 22102); the end-to-end suite uses 22150 and 22151,
-the server's WebSocket tests 22110 to 22139, its fuzz test 22140, and the unit test of `SyncServer` 22195.
+`PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Loopback ports 22100–22199 are used as follows:
+22100 the sync server (development, `pnpm start:prod`, and inside the container), 22101 the Vite dev
+server, 22102 `vite preview`, 22110 to 22139 the server's WebSocket tests, 22140 its fuzz test, 22141
+to 22149 its static-file tests, 22150 and 22151 the end-to-end suite, 22160 the port `docker compose`
+publishes, and 22195 the unit test of `SyncServer`.

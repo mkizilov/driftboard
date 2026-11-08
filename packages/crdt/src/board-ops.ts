@@ -67,6 +67,14 @@ export class BoardFormatError extends Error {
   override readonly name = 'BoardFormatError';
 }
 
+/**
+ * Zero without a sign. `-0` is a valid coordinate, but neither JSON nor the binary form keeps the
+ * sign, so it would stay `-0` on the replica that wrote it and be `0` on every other.
+ */
+export function plainZero(value: number): number {
+  return value === 0 ? 0 : value;
+}
+
 export function assertCoordinate(value: unknown, what: string): asserts value is number {
   if (typeof value !== 'number' || !Number.isFinite(value)) {
     throw new RangeError(`${what} must be a finite number, got ${String(value)}`);

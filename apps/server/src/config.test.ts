@@ -51,6 +51,12 @@ describe('loadConfig', () => {
     });
   });
 
+  it('serves no files unless it is told where the built web app is', () => {
+    expect(loadConfig({}).staticDir).toBeUndefined();
+    expect(loadConfig({ DRIFTBOARD_STATIC_DIR: '' }).staticDir).toBeUndefined();
+    expect(loadConfig({ DRIFTBOARD_STATIC_DIR: '../web/dist' }).staticDir).toBe('../web/dist');
+  });
+
   it('rejects values that are not valid', () => {
     expect(() => loadConfig({ DRIFTBOARD_PORT: 'abc' })).toThrow(/DRIFTBOARD_PORT/);
     expect(() => loadConfig({ DRIFTBOARD_PORT: '70000' })).toThrow(/DRIFTBOARD_PORT/);
@@ -61,5 +67,8 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ DRIFTBOARD_RATE_OPS_PER_SECOND: '0' })).toThrow(/OPS_PER_SECOND/);
     expect(() => loadConfig({ DRIFTBOARD_RATE_MESSAGE_BURST: '-5' })).toThrow(/MESSAGE_BURST/);
     expect(() => loadConfig({ DRIFTBOARD_MAX_NOTE_NODES: '0' })).toThrow(/MAX_NOTE_NODES/);
+    // More than the clients accept would make them disagree about which characters they hold.
+    expect(() => loadConfig({ DRIFTBOARD_MAX_NOTE_NODES: '100001' })).toThrow(/clients accept/);
+    expect(loadConfig({ DRIFTBOARD_MAX_NOTE_NODES: '100000' }).maxNoteNodes).toBe(100_000);
   });
 });

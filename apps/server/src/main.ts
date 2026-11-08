@@ -14,10 +14,16 @@ const server = await startSyncServer({
   helloTimeoutMs: config.helloTimeoutMs,
   rateLimits: config.rateLimits,
   maxNoteNodes: config.maxNoteNodes,
+  ...(config.staticDir === undefined ? {} : { staticDir: config.staticDir }),
 });
 console.log(
   `driftboard server listening on ws://${config.host}:${server.port}/ws (db: ${config.dbPath})`,
 );
+if (config.staticDir !== undefined) {
+  console.log(
+    `serving the web app from ${config.staticDir} at http://${config.host}:${server.port}/`,
+  );
+}
 
 async function shutdown(): Promise<void> {
   await server.close();

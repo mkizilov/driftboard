@@ -128,7 +128,14 @@ export class CausalBuffer<Op> {
         } catch (error) {
           if (reject === undefined) throw error;
           reject(current, error);
-          this.#refuseDependents(current, reject);
+          // An `apply` can throw after it took effect. What waits for the id then goes ahead, as it
+          // does on a replica where nothing threw; otherwise replicas would differ in what they hold.
+          const provided = this.#options.provides(current);
+          if (provided !== undefined && this.#options.isApplied(provided)) {
+            for (const released of this.#release(provided)) queue.push(released);
+          } else {
+            this.#refuseDependents(current, reject);
+          }
         }
       }
     } catch (error) {

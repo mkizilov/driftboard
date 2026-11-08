@@ -22,7 +22,7 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
-| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors. Planned: LWW register, add-wins map, RGA text. No runtime deps. |
+| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, plus a generic convergence harness (`convergence*.ts`, test-only). Planned: RGA text. No runtime deps. |
 | `packages/protocol` | Sync message types validated with zod.                                     |
 | `apps/server`       | Node 22 sync server: `ws` + `better-sqlite3`; databases in `./.data/`.     |
 | `apps/web`          | React 18 + Vite client.                                                    |
@@ -59,6 +59,8 @@ When Playwright is added, install its browsers into the project with `PLAYWRIGHT
 - Prettier formatting (`.prettierrc.json`); ESLint flat config; tests with Vitest and fast-check
   (use property tests for CRDT laws).
 - Tests are colocated as `*.test.ts(x)` next to the source.
+- Every new CRDT gets a `ConvergenceSpec` and a `checkConvergence(spec)` test (1000 runs by default);
+  see `packages/crdt/src/lww-register.test.ts` for the pattern and `DESIGN.md` (Convergence harness).
 - Server SQLite files live under `./.data/` (git-ignored). Never write databases elsewhere.
 
 ## Rule: `packages/crdt` stays pure
@@ -79,10 +81,12 @@ disable those rules.
 
 ## Known state
 
-The scaffold (and the turn-2 clocks/IDs code) was written in an environment with no network access,
-so no `pnpm install` has run: there is no `pnpm-lock.yaml` yet and `pnpm check` has not been
-executed. Turn 2 logic was only smoke-tested with Node's built-in type stripping, not with
-Vitest/fast-check/tsc/ESLint. On the first machine with
+The scaffold and all `packages/crdt` code (turns 1-3) were written in an environment with no
+network access, so no `pnpm install` has run: there is no `pnpm-lock.yaml` yet and `pnpm check` has
+not been executed. The crdt tests were only run under throwaway minimal stand-ins for Vitest and
+fast-check (no shrinking, different random streams) on Node's built-in type stripping, and never
+with the real Vitest/fast-check/tsc/ESLint, so type or lint errors and real-fast-check-only
+failures are still possible. On the first machine with
 network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
 `pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
 `--frozen-lockfile`. Delete this section once that is done.

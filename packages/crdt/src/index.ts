@@ -1,3 +1,11 @@
+export { AwMap, CausalOrderError } from './aw-map';
+export type {
+  AwMapDotEntry,
+  AwMapJoin,
+  AwMapOp,
+  AwMapPutOp,
+  AwMapRemoveOp,
+} from './aw-map';
 export { createManualClock } from './clock';
 export type { Clock, ManualClock } from './clock';
 export {
@@ -13,7 +21,9 @@ export {
 } from './hlc';
 export type { HlcTimestamp, HybridLogicalClockOptions } from './hlc';
 export { LamportClock } from './lamport';
-export { compareOpIds, opId, opIdEquals } from './op-id';
+export { LwwRegister } from './lww-register';
+export type { LwwSetOp } from './lww-register';
+export { compareOpIds, opId, opIdEquals, opIdKey } from './op-id';
 export type { LamportTimestamp, OpId } from './op-id';
 export type { Ordering } from './ordering';
 export { compareReplicaIds, generateReplicaId, isReplicaId, replicaId } from './replica-id';

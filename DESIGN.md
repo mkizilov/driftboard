@@ -46,17 +46,18 @@ Semantics worth stating up front:
 - Concurrent moves of the same note: last writer (by HLC) wins; the note never lands at a
   mixed `x`/`y`.
 - Concurrent text edits merge character by character; neither edit is lost.
-- Delete vs. edit: the map is **add-wins**. Any edit to a note re-asserts its presence, so an edit
-  concurrent with a delete resurrects the note, and no work is silently discarded. A delete only
-  removes the note state that the deleting replica had observed.
+- Delete vs. edit: the map is **add-wins**. Any edit to a note re-asserts its presence (an edit is
+  a `put` that replaces the dots its author saw), so an edit concurrent with a delete resurrects
+  the note, and no work is silently discarded. A delete only removes the note state that the
+  deleting replica had observed.
 
 ## CRDTs
 
 All types live in `packages/crdt` and are pure: time comes from an injected `Clock`, randomness and
 replica ids are passed in, and there is no I/O. Each type supports merge/apply that is
 commutative, associative and idempotent, which is verified with fast-check property tests.
-Identifiers, clocks and version vectors are implemented; the LWW register, add-wins map and RGA
-sequence below are **[planned]**.
+Identifiers, clocks, version vectors, the LWW register and the add-wins map are implemented; the RGA
+sequence below is **[planned]**.
 
 ### Identifiers and clocks **[implemented]**
 
@@ -102,22 +103,78 @@ equal. The physical clock is injected (`Clock.now()`, integer ms).
   that plain string comparison (including SQLite `ORDER BY`) equals `compareHlc`. `parseHlc` is
   its inverse.
 
-### LWW register
+### LWW register **[implemented]**
 
-Holds `(value, timestamp)`. Merge keeps the entry with the greater HLC timestamp. Used for
-`position` and `color`.
+Source: `packages/crdt/src/lww-register.ts`. Immutable `LwwRegister<T>` holding `(value, timestamp)`.
 
-### Add-wins map
+- Operation: `{ type: 'set', value, timestamp }`, built by `prepareSet(value, timestamp)` and
+  applied with `apply(op)`. The write with the greater HLC timestamp wins, so any order and any
+  number of deliveries give the same result. `apply` is idempotent and commutative.
+- State merge: `merge(other)` keeps the entry with the greater timestamp (commutative,
+  associative, idempotent; an empty register is the identity).
+- A write should win over everything its replica has seen. The caller must therefore feed every
+  received timestamp to the replica's clock (`HybridLogicalClock.receive`) before calling `tick()`
+  for the new write. This holds even if the physical clock is behind or jumps backwards.
+- Timestamps must be unique per write (guaranteed by the HLC's replica id). Two different values
+  with an identical timestamp are a caller bug; the first one applied is kept.
+- Used for `position` and `color`.
 
-Each key maps to a set of live "dots" (unique add timestamps) plus the value state.
+### Add-wins map **[implemented]**
 
-- `put`/update a key: create a new dot and add it; the dots the replica had observed are
-  superseded.
-- `remove` a key: delete only the dots the removing replica has observed.
-- A key is present if at least one dot survives. A concurrent add therefore beats a remove.
-- Values are themselves CRDTs (the `Note` fields above) and merge field-wise.
-- Removed-key metadata is compacted once all replicas have observed the removal (causal
-  stability). Until compaction exists, state only grows. **[planned]**
+Source: `packages/crdt/src/aw-map.ts`. Immutable observed-remove map `AwMap<V>` from string keys to
+values `V`; the constructor takes a `join(a, b)` for `V` (commutative, associative, idempotent), for
+example `LwwRegister.merge`.
+
+- **Dots.** Every write creates a *dot*: an `OpId` `(n, replica)` where `n` is that replica's next
+  *map* counter (contiguous, taken from the map's version vector). A dot stores the value written
+  with it. A key is present while at least one of its dots survives.
+- **`put`** `{ key, dot, value, supersedes }`: `supersedes` lists the dots of that key the issuer had
+  observed; they are replaced by the new dot. Concurrent writes of one key from different replicas
+  both survive and the visible value is the `join` of all surviving dots' values (applied in dot
+  order, so it is deterministic).
+- **`remove`** `{ key, dots }`: deletes only the dots the issuer had observed. A concurrent write has
+  a dot the remover never saw, so it survives: **add wins**.
+- **Causal context, no tombstones.** The map's `VersionVector` records every write seen. A dot that
+  the vector covers but the map no longer holds was removed or replaced. This keeps duplicates
+  harmless (a write already covered is ignored, even if it was later removed) and makes state
+  merge possible without tombstones.
+- **Delivery requirements.** Each replica's writes must be applied in order, and an operation only
+  after the writes it refers to (causal delivery). `apply` throws `CausalOrderError` for a gap or
+  an unseen reference; the sync layer is responsible for buffering until the predecessors arrive.
+  Re-applying an operation is a no-op.
+- **State merge** `merge(other)` is the standard dot-store join: a dot present on one side only
+  survives if the other side's version vector has not seen it; version vectors merge pointwise. It
+  is commutative, associative, idempotent, and equals replaying the union of both sides' operations
+  (checked by the convergence harness below).
+- **Value size.** Every write carries its whole value, so values should be small join-able states
+  (for example a record of LWW registers for `position` and `color`). The text sequence is a large
+  structure; how it hangs off a note (most likely a separate per-note structure whose visibility is
+  governed by the map's presence) is **[open]** until the sequence CRDT exists.
+- Nothing is ever compacted yet: the version vector grows with the number of replicas that wrote.
+  **[planned]**
+
+### Convergence harness
+
+Source: `packages/crdt/src/convergence.ts` (fast-check wrapper) and `convergence-scenario.ts` (the
+runner, which has no test-framework imports). Test-only; not exported from the package.
+
+A CRDT plugs in through a `ConvergenceSpec`: `create`, `prepare` (turn a random intent into an
+operation using the replica's state and clock), `apply`, `snapshot` (canonical JSON of the *entire*
+state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. `checkConvergence(spec,
+{ numRuns = 1000 })` then generates random scenarios on 3 replicas:
+
+- local operations, with the replicas' physical clocks randomly advanced or moved backwards;
+- deliveries of single operations to a replica, chosen at random among those that are *causally
+  ready* (everything the origin had applied when it created the operation is already applied);
+- redeliveries of already-applied operations (only if `idempotentApply`);
+- a final drain of the remaining operations in a random causally valid order.
+
+It fails unless all three replicas end with the snapshot of a reference replica that applied the
+operations in creation order; redelivery never changes a snapshot; and, if `merge` is given, merging
+recorded intermediate states is commutative, associative, idempotent and equal to replaying the
+union of their operations. `checkConvergence` returns totals (operations, concurrent pairs,
+redeliveries, merge checks) so tests can assert that runs were not vacuous. `convergence.test.ts`
+checks the harness itself against deliberately broken CRDTs.
 
 ### RGA-style sequence (text)
 

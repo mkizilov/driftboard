@@ -29,3 +29,8 @@ export function compareOpIds(a: OpId, b: OpId): Ordering {
 export function opIdEquals(a: OpId, b: OpId): boolean {
   return a.counter === b.counter && a.replicaId === b.replicaId;
 }
+
+/** Canonical string form (`counter@replicaId`), unambiguous because replica ids never contain `@`. */
+export function opIdKey(id: OpId): string {
+  return `${id.counter}@${id.replicaId}`;
+}

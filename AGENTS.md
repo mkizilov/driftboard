@@ -22,10 +22,10 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
-| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
+| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), `BoardHistory` (undo and redo of the local user's own changes by inverse operations), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
 | `packages/protocol` | Sync messages validated with zod (`hello`, `ops`, `ack`, `presence`, `error`; protocol version 2) and the sync logic as pure functions: operation store, per-connection session, server `Room` (which also remembers each present replica's latest presence in memory, to tell newcomers). Depends on `@driftboard/crdt`. |
 | `apps/server`       | Node 22 sync server: `ws` WebSockets (one room per unguessable board id, using the protocol's `Room`), `GET /healthz`, `better-sqlite3` in `./.data/` with each board's log as a compacted snapshot plus a tail. |
-| `apps/web`          | React 18 + Vite client: `/` creates a board, `/b/:boardId` is the canvas. Framework-free logic in `src/lib` (text diff, caret, text binding, board store, sync connection, offline storage in IndexedDB through `idb`, write-behind persistence, sync indicator, ephemeral presence: identity, throttled sender, timing-out store; viewport, route); thin React in `src/components` and `src/hooks`. Installable offline PWA through `vite-plugin-pwa` (`vite.config.ts`, `src/pwa-manifest.ts`, icons from `scripts/make-icons.mjs`). Component tests use jsdom through `src/test-render.ts`. |
+| `apps/web`          | React 18 + Vite client: `/` creates a board, `/b/:boardId` is the canvas. Framework-free logic in `src/lib` (text diff, caret, text binding, board store, sync connection, offline storage in IndexedDB through `idb`, write-behind persistence, sync indicator, ephemeral presence: identity, throttled sender, timing-out store; undo/redo keys; viewport, route); thin React in `src/components` and `src/hooks`. Installable offline PWA through `vite-plugin-pwa` (`vite.config.ts`, `src/pwa-manifest.ts`, icons from `scripts/make-icons.mjs`). Component tests use jsdom through `src/test-render.ts`. |
 
 Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
 separate library build step. The server runs through `tsx`.
@@ -83,7 +83,7 @@ disable those rules.
 
 ## Known state
 
-The scaffold, `packages/crdt`, `packages/protocol`, `apps/server` and `apps/web` (turns 1-10) were
+The scaffold, `packages/crdt`, `packages/protocol`, `apps/server` and `apps/web` (turns 1-11) were
 written in an environment with no network access, so no `pnpm install` has run: there is no
 `pnpm-lock.yaml` yet and `pnpm check` has not been executed. The tests were only run under throwaway
 minimal stand-ins for Vitest, fast-check and zod (which cover only the features used), plus, for the
@@ -98,10 +98,11 @@ IndexedDB the stand-in is a small in-memory replacement for `idb` (object stores
 transactions that roll back on a failed request), so `lib/idb-storage.ts` ran, but against my model
 of IndexedDB and not the real one, and `fake-indexeddb` has never run. React, Vite, jsdom,
 `vite-plugin-pwa` and `idb` have never been installed, so the `.tsx` files, the hooks, `Canvas`
-pointer and wheel handling, the styles, the nine component tests (`NoteTextArea`, `NoteCard`,
-`BoardPage`, `SyncIndicator`, `PwaBanner`, `Cursors`, `PeopleList`, `HomePage`, `App`; the new
-presence ones assume React turns `pointerout` into `onPointerLeave` and that jsdom dispatches
-`pointermove` events typed as `MouseEvent`), the build, the service worker and the
+pointer and wheel handling, the styles, the ten component tests (`NoteTextArea`, `NoteCard`,
+`BoardPage`, `SyncIndicator`, `PwaBanner`, `Cursors`, `PeopleList`, `UndoRedo`, `HomePage`, `App`;
+the presence ones assume React turns `pointerout` into `onPointerLeave` and that jsdom dispatches
+`pointermove` events typed as `MouseEvent`, the undo ones that jsdom has `InputEvent` with
+`inputType`), the build, the service worker and the
 manifest as the browser sees them have never been compiled or executed, and nothing has been seen
 in a browser. The component tests are the first thing to run: if they fail, check them against the
 real DOM before changing `lib/text-binding.ts` or `lib/offline-first.test.ts`'s expectations, which

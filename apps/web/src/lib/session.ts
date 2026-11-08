@@ -1,4 +1,10 @@
-import { Board, VersionVector, generateReplicaId, type ReplicaId } from '@driftboard/crdt';
+import {
+  Board,
+  BoardHistory,
+  VersionVector,
+  generateReplicaId,
+  type ReplicaId,
+} from '@driftboard/crdt';
 import { storeMissing, toBoardOps } from '@driftboard/protocol';
 import { BoardStore } from './board-store';
 import { IdentityStore } from './identity';
@@ -59,6 +65,7 @@ export interface SessionOptions {
  * Opens a board local-first: whatever the device holds is read from storage and put into the
  * document before anything connects, so the board is there even with no network. Every operation
  * that later enters the store is written back; nothing waits for the network or for the disk.
+ * Nothing from earlier page loads can be undone: undo is for what this page did.
  *
  * Every page load is a new replica with a new id, because two tabs sharing one replica id would
  * write conflicting operation streams. Operations that earlier page loads made and the server does
@@ -96,9 +103,16 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
     ...(options.random === undefined ? {} : { random: options.random }),
     ...(options.retry === undefined ? {} : { retry: options.retry }),
   });
-  const store = new BoardStore(board, (ops) => {
-    connection.submit(ops);
-  });
+  // Undo history lives as long as the page: it names characters this replica typed, and a reload
+  // is a new replica.
+  const history = new BoardHistory(board, { now: elapsed });
+  const store = new BoardStore(
+    board,
+    (ops) => {
+      connection.submit(ops);
+    },
+    history,
+  );
   const presence = createPresence({
     store: presenceStore,
     identity: options.identity ?? new IdentityStore(null, options.randomBytes),

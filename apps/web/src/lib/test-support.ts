@@ -1,4 +1,4 @@
-import { Board, generateReplicaId, replicaId } from '@driftboard/crdt';
+import { Board, BoardHistory, generateReplicaId, replicaId } from '@driftboard/crdt';
 import { stampOps, type PresenceState, type StampedOp } from '@driftboard/protocol';
 import type { TextControl } from './caret';
 import { IdentityStore } from './identity';
@@ -77,6 +77,11 @@ export class FakeTextarea implements TextControl {
  * A replica with its own id (derived from `seed`) and a physical clock that moves a millisecond
  * per reading.
  */
+/** An undo history for `board`; by default time stands still, so all typing is one step. */
+export function historyOf(board: Board, now: () => number = () => 0): BoardHistory {
+  return new BoardHistory(board, { now });
+}
+
 export function replica(seed: number): Board {
   let time = 1_000;
   return new Board({

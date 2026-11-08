@@ -5,7 +5,7 @@ export interface Identity {
   readonly color: string;
 }
 
-/** Longest name, in characters; 40 of them are at most 80 UTF-16 units, which the protocol allows. */
+/** Longest name, in characters. 40 are at most 80 UTF-16 units, which the protocol allows. */
 export const MAX_NAME_CHARS = 40;
 
 /** Colours that stay readable under white text and on the board's paper. */

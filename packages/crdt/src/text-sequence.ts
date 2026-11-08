@@ -171,12 +171,33 @@ export class TextSequence {
     if (!Number.isInteger(index) || index < 0 || index > this.#visible.length) {
       throw new RangeError(`insert index ${index} out of range 0-${this.#visible.length}`);
     }
+    return this.#insertAt(index === 0 ? this.#root : mustAt(this.#visible, index - 1), text);
+  }
+
+  /**
+   * Inserts `text` directly after the character `id`, or at the start of the document if `id` is
+   * `null`. The character may be one that was deleted: a tombstone keeps its place, so the text
+   * lands exactly there, whatever else has happened to the document since. Returns one operation
+   * per code point, like `insert`.
+   */
+  insertAfter(id: OpId | null, text: string): TextInsertOp[] {
+    this.#refresh();
+    let origin: TreeNode = this.#root;
+    if (id !== null) {
+      const node = this.#nodes.get(opIdKey(id));
+      if (node === undefined) throw new RangeError(`Unknown character ${opIdKey(id)}`);
+      origin = node;
+    }
+    return this.#insertAt(origin, text);
+  }
+
+  /** Inserts `text` directly after `origin` in document order (tombstones count). */
+  #insertAt(origin: TreeNode, text: string): TextInsertOp[] {
     const ops: TextInsertOp[] = [];
-    const origin: TreeNode = index === 0 ? this.#root : mustAt(this.#visible, index - 1);
-    // Fugue: if the character to the left has no right children, the new one becomes its first
-    // right child. Otherwise the next node in document order (the leftmost node of that right
-    // subtree) has no left children yet, and the new character becomes its left child. Either
-    // way the new node lands directly after `origin`. The rest of a run chains to the right.
+    // Fugue: if `origin` has no right children, the new character becomes its first right child.
+    // Otherwise the next node in document order (the leftmost node of that right subtree) has no
+    // left children yet, and the new character becomes its left child. Either way the new node
+    // lands directly after `origin`. The rest of a run chains to the right.
     const hasRightChildren = origin.right.length > 0;
     let parent: TreeNode = hasRightChildren ? mustAt(this.#order, origin.index + 1) : origin;
     let side: TextSide = hasRightChildren ? 'left' : 'right';

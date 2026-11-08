@@ -16,7 +16,7 @@ import {
   type SyncConnectionOptions,
 } from './sync-connection';
 import { FakeNetwork, FakeTimers, serverError, type FakeSocket } from './test-network';
-import { operations, replica } from './test-support';
+import { historyOf, operations, replica } from './test-support';
 
 function must<T>(value: T | undefined): T {
   if (value === undefined) throw new Error('expected a value');
@@ -39,9 +39,13 @@ function setup(random: () => number = () => 0) {
       retry: { initialMs: 100, maxMs: 1000 },
       ...extra,
     });
-    const store = new BoardStore(board, (ops) => {
-      connection.submit(ops);
-    });
+    const store = new BoardStore(
+      board,
+      (ops) => {
+        connection.submit(ops);
+      },
+      historyOf(board),
+    );
     return { board, connection, store };
   };
   /** The socket most recently made. */

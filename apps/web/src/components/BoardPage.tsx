@@ -5,6 +5,7 @@ import type { BoardSession } from '../lib/session';
 import { Canvas } from './Canvas';
 import { PeopleList } from './PeopleList';
 import { SyncIndicator } from './SyncIndicator';
+import { UndoRedo } from './UndoRedo';
 
 function CopyLinkButton() {
   const [copied, setCopied] = useState(false);
@@ -62,6 +63,7 @@ export function BoardPage({ boardId, createSession = createBrowserSession }: Boa
         </a>
         <SyncIndicator session={session} />
         <PeopleList presence={session.presence} />
+        <UndoRedo store={session.store} />
         <span className="hint">Double-click the canvas to add a note</span>
         <CopyLinkButton />
       </header>

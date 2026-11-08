@@ -329,6 +329,98 @@ describe('Board: changing notes', () => {
   });
 });
 
+describe('Board: supporting an undo history', () => {
+  it('lists a note’s characters in document order, with deleted ones marked', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ text: 'abc' });
+    board.editText(id, 1, 1, '');
+    const nodes = board.textNodes(id);
+    expect(nodes.map((node) => node.value)).toEqual(['a', 'b', 'c']);
+    expect(nodes.map((node) => node.deleted)).toEqual([false, true, false]);
+    expect(nodes.every((node) => node.id.replicaId === 'a')).toBe(true);
+  });
+
+  it('has no characters for a note without text and for one that does not exist', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote();
+    expect(board.textNodes(id)).toEqual([]);
+    expect(board.textNodes('nope')).toEqual([]);
+  });
+
+  it('keeps a deleted note’s characters', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ text: 'hi' });
+    board.deleteNote(id);
+    expect(board.textNodes(id).map((node) => node.value)).toEqual(['h', 'i']);
+  });
+
+  it('gives a note’s fields while it exists and not afterwards', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ x: 3, y: 4, color: 'pink' });
+    const fields = must(board.getFields(id));
+    expect([fields.x.value, fields.y.value, fields.color.value]).toEqual([3, 4, 'pink']);
+    expect(fields.x.timestamp).toBeDefined();
+    board.deleteNote(id);
+    expect(board.getFields(id)).toBeUndefined();
+  });
+
+  it('restores a deleted note with the fields it had and its text', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ x: 3, y: 4, color: 'pink', text: 'keep' });
+    board.moveNote(id, 30, 40);
+    const fields = must(board.getFields(id));
+    const before = JSON.stringify(board.getNote(id));
+    board.deleteNote(id);
+    const ops = board.restoreNote(id, fields);
+    expect(ops).toHaveLength(1);
+    expect(ops[0]).toMatchObject({ type: 'notes', op: { type: 'put', key: id } });
+    expect(JSON.stringify(board.getNote(id))).toBe(before);
+  });
+
+  it('does nothing when the note exists, and logs nothing', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ text: 'x' });
+    const logged = board.log.length;
+    expect(board.restoreNote(id, must(board.getFields(id)))).toEqual([]);
+    expect(board.log).toHaveLength(logged);
+  });
+
+  it('restores a note for other replicas, and keeps newer writes they made to it', () => {
+    const [a, b] = pair();
+    const { id, ops } = a.createNote({ x: 1, y: 1, text: 'hi' });
+    b.applyRemote(ops);
+    const fields = must(a.getFields(id));
+    b.applyRemote(a.deleteNote(id));
+    // b moves the note while a restores it: b did not know of the deletion.
+    const mine = a.restoreNote(id, fields);
+    const theirs = b.getNote(id) === undefined ? [] : b.moveNote(id, 9, 9);
+    b.applyRemote(mine);
+    a.applyRemote(theirs);
+    expectConverged(a, b);
+    expect(must(a.getNote(id))).toMatchObject({ x: 1, y: 1, text: 'hi' });
+  });
+
+  it('types text after a character, including a deleted one, and re-asserts the note', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ text: 'abc' });
+    const b = must(board.textNodes(id)[1]).id;
+    board.editText(id, 1, 1, '');
+    const ops = board.insertTextAfter(id, b, 'X');
+    expect(must(board.getNote(id)).text).toBe('aXc');
+    expect(ops.map((op) => op.op.type)).toEqual(['insert', 'put']);
+    expect(board.insertTextAfter(id, null, '')).toEqual([]);
+    board.insertTextAfter(id, null, '>');
+    expect(must(board.getNote(id)).text).toBe('>aXc');
+  });
+
+  it('refuses to type into a note that does not exist', () => {
+    const board = boardOf('a');
+    const { id } = board.createNote({ text: 'abc' });
+    board.deleteNote(id);
+    expect(() => board.insertTextAfter(id, null, 'x')).toThrow(UnknownNoteError);
+  });
+});
+
 describe('Board: replication', () => {
   it('replicates a note and its edits', () => {
     const [a, b] = pair();

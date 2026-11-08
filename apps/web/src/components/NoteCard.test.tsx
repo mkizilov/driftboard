@@ -2,7 +2,7 @@
 import { Profiler } from 'react';
 import { afterEach, describe, expect, it } from 'vitest';
 import { BoardStore } from '../lib/board-store';
-import { replica, testPresence } from '../lib/test-support';
+import { historyOf, replica, testPresence } from '../lib/test-support';
 import { INITIAL_VIEWPORT } from '../lib/viewport';
 import { cleanup, flush, must, render, typeInto } from '../test-render';
 import { NoteCard } from './NoteCard';
@@ -10,7 +10,8 @@ import { NoteCard } from './NoteCard';
 afterEach(cleanup);
 
 function mountNotes() {
-  const store = new BoardStore(replica(1), () => undefined);
+  const board = replica(1);
+  const store = new BoardStore(board, () => undefined, historyOf(board));
   const ids = [must(store.createNote(0, 0)), must(store.createNote(40, 40))] as const;
   const viewportRef = { current: INITIAL_VIEWPORT };
   const people = testPresence();

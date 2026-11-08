@@ -183,6 +183,95 @@ describe('TextSequence basics', () => {
   });
 });
 
+describe('TextSequence.insertAfter', () => {
+  const idOf = (s: TextSequence, index: number) => must(s.nodes()[index]).id;
+
+  it('inserts at the start for null, before text that is already there', () => {
+    const s = seq('a');
+    s.insert(0, 'bc');
+    s.insertAfter(null, 'xy');
+    expect(s.toString()).toBe('xybc');
+  });
+
+  it('inserts directly after a visible character, in the middle and at the end', () => {
+    const s = seq('a');
+    s.insert(0, 'abc');
+    s.insertAfter(idOf(s, 0), 'X');
+    expect(s.toString()).toBe('aXbc');
+    s.insertAfter(idOf(s, 3), 'Y');
+    expect(s.toString()).toBe('aXbcY');
+  });
+
+  it('inserts directly after a deleted character, where its tombstone stands', () => {
+    const s = seq('a');
+    s.insert(0, 'abcd');
+    const b = idOf(s, 1);
+    s.delete(1, 2);
+    expect(s.toString()).toBe('ad');
+    s.insertAfter(b, 'X');
+    expect(s.toString()).toBe('aXd');
+    // After the tombstone of c instead: still between a and d, but behind the earlier text.
+    s.insertAfter(idOf(s, 3), 'Y');
+    expect(s.toString()).toBe('aXYd');
+  });
+
+  it('goes by the tombstone, which is not where text typed again in its place stands', () => {
+    const s = seq('a');
+    s.insert(0, 'abc');
+    const a1 = idOf(s, 0);
+    s.delete(0, 3);
+    s.insert(0, 'abc');
+    s.insertAfter(a1, 'X');
+    // The new abc was typed in front of the old tombstones, so a1 is behind it.
+    expect(s.toString()).toBe('abcX');
+  });
+
+  it('inserts several characters in order, as one run', () => {
+    const s = seq('a');
+    s.insert(0, 'ad');
+    const ops = s.insertAfter(idOf(s, 0), 'bc');
+    expect(s.toString()).toBe('abcd');
+    expect(ops.map((op) => op.value)).toEqual(['b', 'c']);
+  });
+
+  it('inserts nothing for empty text', () => {
+    const s = seq('a');
+    s.insert(0, 'ab');
+    expect(s.insertAfter(null, '')).toEqual([]);
+    expect(s.toString()).toBe('ab');
+  });
+
+  it('rejects a character it does not know', () => {
+    const s = seq('a');
+    s.insert(0, 'ab');
+    expect(() => s.insertAfter(opId(99, a), 'x')).toThrow(RangeError);
+    expect(s.toString()).toBe('ab');
+  });
+
+  it('gives operations that other replicas apply to the same result, even in another order', () => {
+    fc.assert(
+      fc.property(
+        fc.array(fc.constantFrom('a', 'b', 'c', '😀'), { minLength: 1, maxLength: 8 }),
+        fc.array(fc.integer({ min: 0, max: 7 }), { maxLength: 6 }),
+        fc.nat(),
+        (chars, deletions, pick) => {
+          const [x, y] = pairWith(chars.join(''));
+          for (const at of deletions) {
+            if (x.length > 0) deliver(x.delete(at % x.length, 1), y);
+          }
+          const nodes = x.nodes();
+          const chosen = nodes[pick % Math.max(1, nodes.length)];
+          const origin = pick % (nodes.length + 1) === 0 || chosen === undefined ? null : chosen.id;
+          const ops = x.insertAfter(origin, 'XY');
+          deliver([...ops].reverse(), y);
+          return x.toString() === y.toString() && x.toString().includes('XY');
+        },
+      ),
+      { numRuns: 300 },
+    );
+  });
+});
+
 describe('TextSequence replication', () => {
   it('propagates inserts and deletes', () => {
     const x = seq('a');

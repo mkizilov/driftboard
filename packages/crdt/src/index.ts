@@ -17,6 +17,8 @@ export {
 export type { JsonObject, JsonValue } from './board-json';
 export { BoardFormatError, NOTE_COLORS, UnknownNoteError, isNoteColor } from './board-ops';
 export type { BoardChange, BoardOp, NoteColor, NoteFields, NoteView } from './board-ops';
+export { BoardHistory, DEFAULT_GROUP_MS, DEFAULT_HISTORY_LIMIT } from './history';
+export type { HistoryOptions, HistoryState } from './history';
 export { CausalBuffer } from './causal-buffer';
 export type { CausalBufferOptions } from './causal-buffer';
 export { createManualClock } from './clock';

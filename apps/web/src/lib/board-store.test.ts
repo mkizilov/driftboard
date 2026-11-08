@@ -1,14 +1,18 @@
 import type { BoardOp } from '@driftboard/crdt';
 import { describe, expect, it } from 'vitest';
 import { BoardStore } from './board-store';
-import { replica } from './test-support';
+import { historyOf, replica } from './test-support';
 
 function setup() {
   const board = replica(1);
   const sent: BoardOp[][] = [];
-  const store = new BoardStore(board, (ops) => {
-    sent.push(ops);
-  });
+  const store = new BoardStore(
+    board,
+    (ops) => {
+      sent.push(ops);
+    },
+    historyOf(board),
+  );
   return { board, store, sent };
 }
 
@@ -32,7 +36,7 @@ describe('BoardStore: reading', () => {
   it('starts with the notes the board already has, ordered by id', () => {
     const board = replica(1);
     const ids = [board.createNote({}).id, board.createNote({}).id, board.createNote({}).id];
-    const store = new BoardStore(board, () => undefined);
+    const store = new BoardStore(board, () => undefined, historyOf(board));
     expect([...store.getIds()]).toEqual([...ids].sort());
     for (const id of ids) expect(store.getNote(id)?.id).toBe(id);
   });
@@ -271,5 +275,136 @@ describe('BoardStore: changes from other replicas', () => {
     store.bringToFront(id);
     store.deleteNote(id);
     expect(sent).toHaveLength(before);
+  });
+});
+
+describe('BoardStore: undo and redo', () => {
+  /** A store whose typing is timed by the test. */
+  function timed() {
+    const board = replica(1);
+    const sent: BoardOp[][] = [];
+    const time = { now: 0 };
+    const store = new BoardStore(
+      board,
+      (ops) => {
+        sent.push(ops);
+      },
+      historyOf(board, () => time.now),
+    );
+    const type = (id: string, start: number, text: string) => {
+      [...text].forEach((char, offset) => {
+        store.editText(id, { start: start + offset, deleteCount: 0, insert: char });
+        time.now += 20;
+      });
+    };
+    return { board, store, sent, time, type };
+  }
+
+  it('reverses the last change, sends the operations that do it, and repeats it on redo', () => {
+    const { store, sent } = timed();
+    const id = must(store.createNote(1, 2));
+    store.moveNote(id, 30, 40);
+    const before = sent.length;
+
+    store.undo();
+    expect(store.getNote(id)).toMatchObject({ x: 1, y: 2 });
+    expect(sent).toHaveLength(before + 1);
+    expect(sent.at(-1)?.length).toBeGreaterThan(0);
+
+    store.redo();
+    expect(store.getNote(id)).toMatchObject({ x: 30, y: 40 });
+    expect(sent).toHaveLength(before + 2);
+  });
+
+  it('undoes rapid typing as one step, and typing after a pause as another', () => {
+    const { store, time, type } = timed();
+    const id = must(store.createNote(0, 0));
+    time.now += 5000;
+    type(id, 0, 'hello');
+    time.now += 5000;
+    type(id, 5, ' there');
+    expect(store.getNote(id)?.text).toBe('hello there');
+    store.undo();
+    expect(store.getNote(id)?.text).toBe('hello');
+    store.undo();
+    expect(store.getNote(id)?.text).toBe('');
+  });
+
+  it('sends nothing, and does not fail, when there is nothing to undo or redo', () => {
+    const { store, sent } = timed();
+    store.undo();
+    store.redo();
+    expect(sent).toEqual([]);
+  });
+
+  it('puts a deleted note back, and undoes the creation of a note', () => {
+    const { store } = timed();
+    const id = must(store.createNote(5, 6));
+    store.setColor(id, 'green');
+    store.deleteNote(id);
+    expect(store.getNote(id)).toBeUndefined();
+    store.undo();
+    expect(store.getNote(id)).toMatchObject({ x: 5, y: 6, color: 'green' });
+    expect([...store.getIds()]).toEqual([id]);
+    store.undo();
+    store.undo();
+    expect([...store.getIds()]).toEqual([]);
+  });
+
+  it('wakes only the note that is undone', () => {
+    const { store } = timed();
+    const a = must(store.createNote(0, 0));
+    const b = must(store.createNote(0, 0));
+    store.moveNote(a, 5, 6);
+    const forA = counter();
+    const forB = counter();
+    store.subscribeNote(a, forA.listener);
+    store.subscribeNote(b, forB.listener);
+    store.undo();
+    expect([forA.calls, forB.calls]).toEqual([1, 0]);
+  });
+
+  it('does not make raising a note a step', () => {
+    const { store } = timed();
+    const first = must(store.createNote(0, 0));
+    must(store.createNote(10, 10));
+    store.bringToFront(first);
+    store.undo();
+    // The second note's creation was undone, not the raising.
+    expect([...store.getIds()]).toEqual([first]);
+  });
+
+  it('leaves a note that someone else deleted alone', () => {
+    const { board, store, sent } = timed();
+    const id = must(store.createNote(0, 0));
+    store.moveNote(id, 9, 9);
+    const other = replica(2);
+    other.applyRemote(board.log);
+    board.applyRemote(other.deleteNote(id));
+    const before = sent.length;
+    store.undo();
+    store.undo();
+    expect(sent).toHaveLength(before);
+    expect(store.getNote(id)).toBeUndefined();
+  });
+
+  it('tells its listeners when undo or redo becomes possible or not, with a stable snapshot', () => {
+    const { store } = timed();
+    const changes = counter();
+    store.subscribeHistory(changes.listener);
+    const none = store.getHistoryState();
+    expect(none).toEqual({ canUndo: false, canRedo: false });
+    expect(store.getHistoryState()).toBe(none);
+
+    const id = must(store.createNote(0, 0));
+    expect(store.getHistoryState()).toEqual({ canUndo: true, canRedo: false });
+    store.moveNote(id, 1, 1);
+    expect(changes.calls).toBe(1);
+    store.undo();
+    expect(store.getHistoryState()).toEqual({ canUndo: true, canRedo: true });
+    store.undo();
+    store.redo();
+    store.redo();
+    expect(store.getHistoryState()).toEqual({ canUndo: true, canRedo: false });
   });
 });

@@ -4,7 +4,7 @@ import { IdentityStore } from '../lib/identity';
 import { openBoardSession, type BoardSession } from '../lib/session';
 import { MemoryDisk } from '../lib/storage';
 import { FakeNetwork, FakeTimers } from '../lib/test-network';
-import { cleanup, flush, must, render, settle, typeInto } from '../test-render';
+import { chord, cleanup, flush, must, render, settle, typeInto } from '../test-render';
 import { BoardPage } from './BoardPage';
 
 afterEach(cleanup);
@@ -75,6 +75,66 @@ async function open({ connect = true, disk = new MemoryDisk() } = {}) {
     cursors,
   };
 }
+
+describe('BoardPage: undo', () => {
+  it('undoes typing in a note with Ctrl+Z, in the textarea and for the other person, and redoes it', async () => {
+    const { theirs, timers, notes, doubleClick } = await open();
+    doubleClick(300, 200);
+    const id = must(theirs.store.getIds()[0]);
+    const textarea = must(must(notes()[0]).querySelector('textarea'));
+    timers.advance(5000);
+    typeInto(textarea, 'hello');
+    expect(theirs.store.getNote(id)?.text).toBe('hello');
+
+    expect(chord(textarea, { key: 'z', ctrlKey: true })).toBe(true);
+    expect(textarea.value).toBe('');
+    expect(theirs.store.getNote(id)?.text).toBe('');
+
+    expect(chord(textarea, { key: 'Z', metaKey: true, shiftKey: true })).toBe(true);
+    expect(textarea.value).toBe('hello');
+    expect(theirs.store.getNote(id)?.text).toBe('hello');
+  });
+
+  it('does not undo what the other person typed into the same note', async () => {
+    const { theirs, timers, notes, doubleClick } = await open();
+    doubleClick(300, 200);
+    const id = must(theirs.store.getIds()[0]);
+    const textarea = must(must(notes()[0]).querySelector('textarea'));
+    timers.advance(5000);
+    typeInto(textarea, 'mine');
+    flush(() => {
+      theirs.store.editText(id, { start: 4, deleteCount: 0, insert: ' theirs' });
+    });
+    expect(textarea.value).toBe('mine theirs');
+    chord(textarea, { key: 'z', ctrlKey: true });
+    expect(textarea.value).toBe(' theirs');
+    expect(theirs.store.getNote(id)?.text).toBe(' theirs');
+  });
+
+  it('brings back a deleted note, from the button or the keys', async () => {
+    const { theirs, notes, doubleClick, screen } = await open();
+    doubleClick(300, 200);
+    const id = must(theirs.store.getIds()[0]);
+    flush(() => {
+      must(must(notes()[0]).querySelector<HTMLButtonElement>('[aria-label="Delete note"]')).click();
+    });
+    expect(notes()).toHaveLength(0);
+    expect(theirs.store.getNote(id)).toBeUndefined();
+
+    flush(() => {
+      must(
+        [...screen.container.querySelectorAll<HTMLButtonElement>('.history button')].find(
+          (button) => button.textContent === 'Undo',
+        ),
+      ).click();
+    });
+    expect(notes()).toHaveLength(1);
+    expect(theirs.store.getNote(id)).toMatchObject({ x: 190, y: 110 });
+
+    chord(document.body, { key: 'Z', ctrlKey: true, shiftKey: true });
+    expect(notes()).toHaveLength(0);
+  });
+});
 
 describe('BoardPage: who is here', () => {
   it('lists this person first, then the others on the board', async () => {

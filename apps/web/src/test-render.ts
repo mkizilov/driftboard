@@ -83,6 +83,24 @@ export function pressKey(element: HTMLElement, key: string): void {
   });
 }
 
+/** A key combination pressed on `target`. Returns whether it was handled (default prevented). */
+export function chord(target: EventTarget, init: KeyboardEventInit): boolean {
+  const event = new KeyboardEvent('keydown', { bubbles: true, cancelable: true, ...init });
+  flush(() => {
+    target.dispatchEvent(event);
+  });
+  return event.defaultPrevented;
+}
+
+/** The browser's own undo or redo reaching `target`, as from a menu. Returns if it was handled. */
+export function nativeHistory(target: EventTarget, inputType: string): boolean {
+  const event = new InputEvent('beforeinput', { bubbles: true, cancelable: true, inputType });
+  flush(() => {
+    target.dispatchEvent(event);
+  });
+  return event.defaultPrevented;
+}
+
 /** An input method composition event. */
 export function composition(textarea: HTMLTextAreaElement, type: 'start' | 'end'): void {
   flush(() => {

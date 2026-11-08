@@ -124,6 +124,25 @@ button {
   white-space: nowrap;
 }
 
+/* ---- Undo and redo ---- */
+
+.history {
+  display: flex;
+  gap: 0.35rem;
+}
+
+.history button {
+  padding: 0.3rem 0.7rem;
+  border: 1px solid var(--grid);
+  border-radius: 0.4rem;
+  background: var(--bar);
+}
+
+.history button:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
 /* ---- Who is here ---- */
 
 .people {

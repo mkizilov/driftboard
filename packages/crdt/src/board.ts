@@ -15,10 +15,10 @@ import { CausalBuffer } from './causal-buffer';
 import type { Clock } from './clock';
 import { HybridLogicalClock, compareHlc, formatHlc, type HlcTimestamp } from './hlc';
 import { LwwRegister } from './lww-register';
-import { opId, opIdKey } from './op-id';
+import { opId, opIdKey, type OpId } from './op-id';
 import { compareValues } from './ordering';
 import type { ReplicaId } from './replica-id';
-import { TextSequence, type TextOp } from './text-sequence';
+import { TextSequence, type TextNode, type TextOp } from './text-sequence';
 
 export interface BoardOptions {
   readonly replicaId: ReplicaId;
@@ -125,6 +125,20 @@ export class Board {
       .entries()
       .map(([id, fields]) => this.#view(id, fields))
       .sort((a, b) => compareValues(a.z, b.z) || compareValues(a.id, b.id));
+  }
+
+  /**
+   * The note's text as the sequence holds it: every character in document order, deleted ones
+   * (tombstones) included, each with its id. Empty for a note that never had text. This is what
+   * lets a history point at characters by id instead of by index, which remote edits shift.
+   */
+  textNodes(noteId: string): TextNode[] {
+    return this.#texts.get(noteId)?.nodes() ?? [];
+  }
+
+  /** The note's fields with the timestamps they were written at, or `undefined` if it is gone. */
+  getFields(noteId: string): NoteFields | undefined {
+    return this.#notes.get(noteId);
   }
 
   /** Every operation that changed the board, in the order it was applied. */
@@ -265,6 +279,20 @@ export class Board {
   }
 
   /**
+   * Types `text` directly after the character `after` (`null` for the start), which may be one
+   * that was deleted: the text lands where that character stands, whatever has happened around it
+   * (see `TextSequence.insertAfter`). Returns no operations if `text` is empty.
+   */
+  insertTextAfter(noteId: string, after: OpId | null, text: string): BoardOp[] {
+    const fields = this.#require(noteId);
+    const changes = this.#newChanges();
+    this.#recordText(noteId, this.#sequence(noteId).insertAfter(after, text), changes);
+    if (changes.applied.length === 0) return [];
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
+    return this.#finishLocal(changes);
+  }
+
+  /**
    * Deletes the note. Its text is kept, so a concurrent edit that survives the delete (add wins)
    * finds the note's text intact.
    */
@@ -273,6 +301,19 @@ export class Board {
     if (remove === undefined) throw new UnknownNoteError(`No note ${JSON.stringify(noteId)}`);
     const changes = this.#newChanges();
     this.#applyNotesOp(remove, changes);
+    return this.#finishLocal(changes);
+  }
+
+  /**
+   * Puts a deleted note back with the fields it had (see `getFields`), text included: a deleted
+   * note's text is kept. The fields keep their old timestamps, so anything another replica wrote
+   * since still wins. Does nothing if the note exists, for example because a concurrent edit by
+   * someone else kept it (add wins).
+   */
+  restoreNote(noteId: string, fields: NoteFields): BoardOp[] {
+    if (this.#notes.get(noteId) !== undefined) return [];
+    const changes = this.#newChanges();
+    this.#applyNotesOp(this.#notes.prepareSet(this.replicaId, noteId, fields), changes);
     return this.#finishLocal(changes);
   }
 

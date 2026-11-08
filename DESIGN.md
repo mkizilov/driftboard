@@ -319,6 +319,86 @@ and `board-json.ts` (JSON).
   The harness also checks that every local call has exactly the intended effect on what the board
   shows.
 
+### Undo and redo **[implemented]**
+
+Source: `packages/crdt/src/history.ts` (`BoardHistory`). Undo and redo reverse only the local user's
+own changes, never anyone else's, by generating *inverse operations*: an undo is a new edit that
+converges like any other, not a rewind, so it cannot touch what others did. Local edits go through
+the history (`createNote`, `moveNote`, `setColor`, `editText`, `deleteNote`, which forward to the
+`Board` and return its operations); `undo()` and `redo()` return the operations to send. Each step
+is described by what it *did*, in terms that stay true while others edit:
+
+- **Text is undone by id, never by index.** A text step names the characters it typed and the
+  characters it deleted. Undoing deletes the typed ones wherever they have ended up (a remote edit
+  shifts every index but not an id) unless they are already gone, and types the deleted ones again as
+  a block directly after the visible character that stood before them, which is recorded with the
+  step (`after`; `null` is the start). Text others typed before, after or inside stays, and a
+  character someone else deleted from the user's typing is not brought back. `Board.textNodes`
+  (every character in document order, tombstones included), `TextSequence.insertAfter` and
+  `Board.insertTextAfter` (type after a character that may be deleted: a tombstone keeps its place)
+  exist for this.
+- **Typed again means new characters.** A deletion cannot be revoked (a tombstone is permanent), so
+  undo types the text anew, and the steps *before* it still name the originals. `Copies` maps each
+  original to the copy that took its place, followed through any number of undos and redos, and is
+  applied to the characters to take out and to the `after` anchor. It is keyed by note, because
+  character ids are only unique within a note. Two anchors that look natural and failed in testing:
+  the character's own tombstone (text typed again goes in front of the old tombstones, so anything
+  that stood between two of them lands behind all the copies) and the previous character *including*
+  tombstones (while undoing last step first, that one is a tombstone of a step not yet redone).
+  Steps are undone last first, so the visible character before a deletion is there, or has a copy.
+- **Redo is the inverse of the inverse.** Undoing a step yields the step that undoes it, in the same
+  shape (a text step's inverse takes out what was put back and puts back what was taken out), and
+  that goes on the redo stack. A new edit clears redo; remote edits clear nothing.
+- **Fields** (position, colour) are restored only while they still hold what the user wrote. If
+  someone else has moved or recoloured the note since, that value is theirs and the step is skipped.
+  A move is one step for `x` and `y`, which are always written together. Raising a note
+  (`bringToFront`, done on every click) is not recorded.
+- **A deleted note** is put back (`Board.restoreNote`) with the fields it had, *including their old
+  timestamps*, so anything another replica wrote since wins over it; its text was kept. If the note
+  exists already (another user's concurrent edit kept it: add wins) there is nothing to restore. A
+  note someone else deleted stays deleted: every step on it is skipped. **A created note** is undone
+  by deleting it, text others added included; redo restores it.
+- **Steps that would change nothing are skipped** (and dropped), so undo carries on to the step
+  before and a key press does something whenever anything can be undone.
+- **Rapid typing is one step.** An edit joins the open typing step if it is in the same note, at most
+  1 s after the last edit (the gap, not the total) and right where the caret was left: it starts at
+  the caret (typing on, forward delete) or ends at it (backspace, replacing a selection that ends
+  there). The caret is remembered as a character id, so remote edits do not move it. Joining folds
+  the net effect into one step (typed and then erased characters cancel; a step that cancels
+  entirely disappears). An undo, a redo, any other kind of step, another note or a pause closes the
+  group. At most 100 steps are kept. The history is in memory: a page load is a new replica, and
+  nothing from before can be undone.
+- **Limits.** If two people delete the same character at once, the one who undoes brings it back.
+  Text taken out of several places in one step comes back as one block at the first place. After
+  redo, text typed inside another's edits may land beside rather than inside them. Ctrl+Y is not
+  bound. The caret after undoing a deletion stays in front of the restored text (the textarea keeps
+  it where it was, as for any change from outside).
+
+**In the web client.** `BoardStore` owns a `BoardHistory` (timed by the session's monotonic clock)
+and offers `undo()`, `redo()` and a stable `getHistoryState` for `useSyncExternalStore`; the
+operations go out through `submit` like any other. `useHistoryShortcuts` (`UndoRedo` mounts it
+beside the Undo and Redo buttons) listens on `window` for Ctrl/Cmd+Z (undo) and Shift+Ctrl/Cmd+Z
+(redo) wherever the focus is, and stops the browser's own undo: the textareas are changed from
+outside, so their native undo stack would be wrong. It also takes the `beforeinput` events
+`historyUndo` and `historyRedo` that the Edit menu or a shake send. Keys of an input method that is
+composing, Alt combinations and the one-line name field (which keeps its own undo) are left alone;
+the rules are pure (`lib/history-keys.ts`).
+
+**Tested.** `history.test.ts`: grouping (the gap boundary, backspace, forward delete, other note,
+after undo), undo and redo of typing, deletions and replacements, **undo after concurrent remote
+edits to the same note** (typing at the start and end, inside the user's own typing, deleting part of
+it, appending after deleted text, typing in the middle of it), **undo of a note deletion** (fields,
+text, for other replicas, redo, when a concurrent edit kept the note, when someone else deleted it),
+undoing creation, position and colour (also when someone else changed them), skipped steps, the
+stacks and their limit, and two properties on random histories: one person undoing everything
+empties the board and redoing everything brings back exactly the same notes, and three people with
+random deliveries converge, every `delete` that an undo or redo makes targets a character of the
+undoer, and undoing every step keeps every character anyone else wrote. Also `insertAfter`,
+`textNodes`, `getFields`, `restoreNote` and `insertTextAfter` in their own tests, and in the web
+client `board-store`, `history-keys`, `undo-sessions` (devices with a server in between, offline,
+reloads, a random three-device session with undo and redo) and the component tests of `UndoRedo`
+and `BoardPage`.
+
 ## Sync protocol **[implemented as pure logic; the server and the web client use it]**
 
 Source: `packages/protocol/src`. `messages.ts` (zod schemas, parse/encode), `ops.ts` and `store.ts`
@@ -520,10 +600,10 @@ reads it with `useSyncExternalStore`: `useNoteIds` subscribes to the list and `u
 note, so a change to one note renders only that note's `NoteCard` (memoised on `store`, `id` and a
 stable `viewportRef`), and panning or zooming renders no note. Ids are in a fixed order and
 stacking is the note's `z`, so raising a note never reorders the DOM or makes React move a focused
-textarea. The store's mutators change the board and hand the resulting operations to
-`SyncConnection.submit`; changing nothing (moving to the same place, picking the same colour,
-raising the top note) sends nothing, and a note that someone else deleted meanwhile is ignored
-quietly.
+textarea. The store's mutators change the board, through its `BoardHistory` so that they can be
+undone (see "Undo and redo"), and hand the resulting operations to `SyncConnection.submit`;
+changing nothing (moving to the same place, picking the same colour, raising the top note) sends
+nothing, and a note that someone else deleted meanwhile is ignored quietly.
 
 **Sync.** `SyncConnection` (`lib/sync-connection.ts`) runs the protocol's pure `Session` over a
 WebSocket (replaceable in tests through `SocketFactory`, and its timers through `Timers`): it opens
@@ -581,7 +661,8 @@ falls due in order, so throttling and timeouts are tested to the millisecond (`p
 presence is not written to any disk and that, after random moves, edits, renames, disconnects and
 reloads on three devices, everyone sees exactly the others who are online as they last said). The
 components (`NoteTextArea`, `NoteCard`, `BoardPage`, `SyncIndicator`, `PwaBanner`, `Cursors`,
-`PeopleList`, `HomePage`, `App`) are tested with React and jsdom through `test-render.ts`.
+`PeopleList`, `UndoRedo`, `HomePage`, `App`) are tested with React and jsdom through
+`test-render.ts`.
 
 ### Presence **[implemented]**
 

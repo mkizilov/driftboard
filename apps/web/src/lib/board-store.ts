@@ -2,7 +2,9 @@ import {
   UnknownNoteError,
   type Board,
   type BoardChange,
+  type BoardHistory,
   type BoardOp,
+  type HistoryState,
   type NoteColor,
   type NoteView,
 } from '@driftboard/crdt';
@@ -30,20 +32,24 @@ function sortedIds(views: ReadonlyMap<string, NoteView>): readonly string[] {
  * Ids are in a fixed order (by id) and stacking is left to each note's `z`, so raising a note never
  * reorders the list, and never makes React move a focused textarea in the DOM.
  *
- * The mutators change the board and pass the resulting operations to `submit`, which sends them.
- * A note that another user deleted in the meantime is ignored quietly.
+ * The mutators change the board, through its `BoardHistory` so that they can be undone, and pass
+ * the resulting operations to `submit`, which sends them. `undo` and `redo` do the same with the
+ * operations that reverse or repeat this user's last step. A note that another user deleted in the
+ * meantime is ignored quietly.
  */
 export class BoardStore {
   readonly #board: Board;
+  readonly #history: BoardHistory;
   readonly #submit: (ops: BoardOp[]) => void;
   readonly #views = new Map<string, NoteView>();
   readonly #noteListeners = new Map<string, Set<Listener>>();
   readonly #listListeners = new Set<Listener>();
   #ids: readonly string[] = [];
 
-  constructor(board: Board, submit: (ops: BoardOp[]) => void) {
+  constructor(board: Board, submit: (ops: BoardOp[]) => void, history: BoardHistory) {
     this.#board = board;
     this.#submit = submit;
+    this.#history = history;
     for (const note of board.notes()) this.#views.set(note.id, note);
     this.#ids = sortedIds(this.#views);
     board.subscribe((change) => {
@@ -98,7 +104,7 @@ export class BoardStore {
   /** Creates an empty note with its top-left corner at `x`, `y`. Returns its id. */
   createNote(x: number, y: number): string | undefined {
     return this.#local(() => {
-      const { id, ops } = this.#board.createNote({ x, y });
+      const { id, ops } = this.#history.createNote({ x, y });
       return { ops, result: id };
     });
   }
@@ -106,32 +112,49 @@ export class BoardStore {
   moveNote(id: string, x: number, y: number): void {
     const note = this.#views.get(id);
     if (note === undefined || (note.x === x && note.y === y)) return;
-    this.#local(() => ({ ops: this.#board.moveNote(id, x, y), result: undefined }));
+    this.#local(() => ({ ops: this.#history.moveNote(id, x, y), result: undefined }));
   }
 
   setColor(id: string, color: NoteColor): void {
     if (this.#views.get(id)?.color === color) return;
-    this.#local(() => ({ ops: this.#board.setColor(id, color), result: undefined }));
+    this.#local(() => ({ ops: this.#history.setColor(id, color), result: undefined }));
   }
 
-  /** Raises the note above all others, unless it already is. */
+  /** Raises the note above all others, unless it already is. Not an undo step. */
   bringToFront(id: string): void {
     if (this.#views.has(id) && !this.isTop(id)) {
-      this.#local(() => ({ ops: this.#board.bringToFront(id), result: undefined }));
+      this.#local(() => ({ ops: this.#history.bringToFront(id), result: undefined }));
     }
   }
 
   /** Applies one text edit, in code points, as found by `diffText`. */
   editText(id: string, edit: TextEdit): void {
     this.#local(() => ({
-      ops: this.#board.editText(id, edit.start, edit.deleteCount, edit.insert),
+      ops: this.#history.editText(id, edit.start, edit.deleteCount, edit.insert),
       result: undefined,
     }));
   }
 
   deleteNote(id: string): void {
-    this.#local(() => ({ ops: this.#board.deleteNote(id), result: undefined }));
+    this.#local(() => ({ ops: this.#history.deleteNote(id), result: undefined }));
   }
+
+  // ---- Undo and redo ----------------------------------------------------------------------
+
+  /** Reverses this user's last change that is still theirs to reverse. */
+  undo(): void {
+    this.#local(() => ({ ops: this.#history.undo(), result: undefined }));
+  }
+
+  redo(): void {
+    this.#local(() => ({ ops: this.#history.redo(), result: undefined }));
+  }
+
+  /** Whether there is anything to undo or redo. The same object until that changes. */
+  readonly getHistoryState = (): HistoryState => this.#history.getState();
+
+  readonly subscribeHistory = (listener: Listener): (() => void) =>
+    this.#history.subscribe(listener);
 
   // ---- Internals --------------------------------------------------------------------------
 

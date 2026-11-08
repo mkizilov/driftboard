@@ -16,6 +16,7 @@ repository today, **[planned]** is designed here but not yet implemented.
 | `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | implemented |
 | `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.          | implemented |
 | `e2e`               | Playwright end-to-end suite: real server and build, several browsers.   | implemented |
+| `bench`             | Benchmarks and the report behind `PERFORMANCE.md`.                       | implemented |
 
 Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
 `crdt`; `crdt` depends on nothing.
@@ -205,14 +206,27 @@ interleaves concurrent words in one common case (see "Interleaving" below).
   characters of an `insert(index, text)` call each become the right child of the previous one, so a
   run of typing is a chain.
 - **Local delete** only sets tombstones; the tree does not change, so later inserts can still refer
-  to deleted characters. Tombstones are kept forever for now; dropping them once causally stable is
-  **[planned]**.
+  to deleted characters. Tombstones are kept forever for now; when they could safely be dropped, and
+  what they cost until then, is worked out in `PERFORMANCE.md` ("Tombstones").
 - **API.** `insert(index, text)` and `delete(index, length)` apply locally and return the
   operations to send; `apply(op)` takes remote (or echoed) operations; `toString()`, `length`,
   `nodes()` (the whole tree in document order, for snapshots and tests) and `pendingCount`. Indices
   count code points (not UTF-16 units, not grapheme clusters). The replica is a mutable object while
-  its operations are immutable. The document order is rebuilt lazily with an explicit stack, so an
-  edit after a change costs O(n) and very long runs cannot overflow the call stack.
+  its operations are immutable.
+- **Index to character and back.** Editing needs "the character at index i" on every keystroke, and
+  the Fugue rules need "the node after this one in document order". Both come from an `OrderTree`
+  (`order-tree.ts`): an order-statistic B+ tree over the nodes in document order, tombstones
+  included, whose leaves hold up to 64 nodes and whose inner nodes up to 16 children, each knowing
+  how many nodes lie below it and how many of them are shown. Index to node descends by those counts,
+  node to index climbs the parent pointers, and inserting next to a node, hiding one and reading the
+  length are O(log n); the text is cached per leaf, so reading it after an edit costs one leaf and a
+  join, not a walk of the document. A node is put into the tree when it arrives: where it goes is
+  decided by the Fugue rules alone (before the first node of its next sibling; else right before its
+  parent on the left, or right after the last node of its previous sibling or of the parent on the
+  right), so no operation ever rebuilds the order. Nodes are only added and hidden, never removed, so
+  the tree splits and never merges. An earlier version rebuilt the whole order, with an explicit stack,
+  after every change: O(n) per edit, 264 s for 100,000 edits against 81 ms now (`PERFORMANCE.md`).
+  The order is checked against a plain walk of the tree in `text-sequence-index.test.ts`.
 - **Causal delivery buffer.** `CausalBuffer` is a small generic class: `apply` sends every operation
   through it. An insert requires its parent, a delete requires its target. An operation whose
   requirement has not arrived is parked under that one missing id and applied, together with
@@ -407,9 +421,28 @@ Source: `packages/protocol/src`. `messages.ts` (zod schemas, parse/encode), `ops
 (the server side for one board). Nothing there sends, stores or times anything: every function takes
 state and returns the next state, the messages to send and the operations that are new.
 
-**Transport.** One WebSocket per client per board, JSON text frames of at most 1 MiB. Every frame is
-parsed with zod (`parseMessage`, which never throws); an invalid frame gets an `error` and never
-reaches application code.
+**Transport.** One WebSocket per client per board, frames of at most 1 MiB. Control messages
+(`hello`, `ack`, `presence`, `error`) are JSON text parsed with zod (`parseMessage`); `ops` messages
+are **binary frames**, a compact batch of operations (`binary.ts`, below). `encodeFrame` and
+`parseFrame` produce and read either kind (`parseFrame` also accepts `ops` as JSON text) and never
+throw; an invalid frame gets an `error` and never reaches application code.
+
+**Binary operations** (`binary.ts`, `bytes.ts`; format version 1, protocol version 3). The canonical
+JSON of an operation is about 100 bytes for a typed character and 400 for the note being put again
+that every text edit also writes. `encodeOps` writes a batch as: varints (seven bits per byte), the
+replica and note ids once per batch and an index after that, and these shortcuts. A run of text
+inserts by one replica into one note, each hanging to the right of the one before (a typed word or a
+paste), is one item with the first insert written whole and a code point per character. The same for
+a run of deletes of consecutive counters, up or down. A text edit's re-assertion of its note, which
+repeats the note's latest fields as the replica's next dot, is two bytes or, when it follows an
+insert or delete that continues a run, nothing at all (the run is of *pairs*, which is what typing a
+key at a time makes). A put that changes some fields writes only those, with timestamps as
+differences. `decodeOps` gives back exactly the same operations, same key order, so that stored
+operations still compare equal as text; it is strict about its input (every length is checked against
+what is left, run lengths against the group, replica ids against their syntax) and the operations
+it returns still go through `canonicalizeOp` like any others. Sizes against JSON are in
+`PERFORMANCE.md`: 27 times smaller for a person typing a key at a time, 117 times for a board with
+long texts, 40 times on the wire for a sync after a long offline period.
 
 **Operation identity.** The author of an operation stamps it with `(origin, seq)`: its own replica id
 and a number counting that replica's operations 1, 2, 3, ... without gaps (`authorOps`). A
@@ -421,8 +454,8 @@ different origins may arrive in any order because `Board.applyRemote` tolerates 
 
 | Message | Fields | Purpose |
 | --- | --- | --- |
-| `hello` | `version` (2), `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
-| `ops` | `ops: [{ origin, seq, op }]`, 1 to 500 | A batch of operations the receiver is missing. |
+| `hello` | `version` (3), `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
+| `ops` | `ops: [{ origin, seq, op }]`, 1 to 500 | A batch of operations the receiver is missing. A binary frame. |
 | `ack` | `versionVector` | "I hold everything this covers." Sent after receiving operations that were new. |
 | `presence` | `replicaId`, `state: { cursor, editing, name, color } \| null` | Ephemeral: where the pointer is (board coordinates, or `null`), which note is being edited (or `null`), and the person's name (1 to 80 characters) and colour (`#rrggbb`). Relayed, never stored. `null` means the replica left. |
 | `error` | `code`, `message` | A protocol violation; the sender then closes the connection. |
@@ -476,8 +509,8 @@ the last client leaves the board and the room is dropped. When a client's connec
 relays `state: null` for it. A client that is *silent but not gone* (a frozen tab on a connection
 the server has not noticed is dead) is not the server's business: clients drop whoever they have
 not heard from, see "Presence" under the web client. Protocol version 2 changed the state (it had a
-list of selected notes and an optional name); a version 1 client is refused with
-`unsupported_version`.
+list of selected notes and an optional name); version 3 moved operations into binary frames. A client
+of another version is refused with `unsupported_version`.
 
 **Tested** (`packages/protocol/src/*.test.ts`): schemas and malformed input; the store (gaps,
 conflicts, duplicates, versions that share storage) against a plain model; the handshake, live
@@ -523,9 +556,9 @@ fails a check gets one `error` message and is closed:
 
 | Problem | Close code |
 | --- | --- |
-| binary frame | 1003 |
+| binary frame that is not a batch of operations (bad bytes, no operations, more than 500), or a frame whose kind and data disagree | 1003 |
 | larger than the limit (`maxMessageBytes`, default 1 MiB; also enforced by the WebSocket layer, which cuts the connection off with no reply) | 1009 |
-| not JSON, or not valid against the zod schemas | 1008 |
+| text that is not JSON, or not valid against the zod schemas | 1008 |
 | first message is not `hello`, or its board id is not acceptable | 1008 |
 | no valid `hello` within `helloTimeoutMs` (default 10 s) | 1008 |
 | protocol violation (bad version, gap, conflict, invalid operation payload, presence for another replica) | 1008 |
@@ -541,8 +574,13 @@ past the limit.
 - `ops(board_id, origin, seq, payload)`: the **tail**, one row per operation since the last
   compaction, primary key `(board_id, origin, seq)`.
 - `snapshots(board_id, op_count, payload, updated_at)`: the **snapshot**, every operation up to the
-  last compaction in one row: gzipped JSON `{ "v": 1, "origins": [[origin, [op, ...]], ...] }`
-  without the repeated origin and sequence numbers.
+  last compaction in one row: the gzip of one binary batch of the operations (`encodeOps`, each
+  origin's operations together, origins in order of id), which is the **version 2** snapshot. The
+  **version 1** format, gzipped JSON `{ "v": 1, "origins": [[origin, [op, ...]], ...] }`, is still
+  read, so existing databases keep working, and is replaced by version 2 at the next compaction of
+  each board. The two are told apart by the first byte after unzipping (0xDB, or `{`). Tail rows
+  stay JSON text, one operation each: they are few (a compaction empties them) and one operation
+  alone gains little from the binary form.
 
 New operations go to the tail (one transaction per message). `compact` folds the tail into the
 snapshot in one transaction (decode the snapshot, add the tail, write a new snapshot, delete the tail
@@ -572,7 +610,7 @@ loopback ports 22110-22139 and connects real WebSocket clients (each with a `Boa
 sync logic): three clients converge, one of them after editing offline, with every operation received
 exactly once; boards are isolated by id; presence is relayed; a restart keeps every board, with
 and without a snapshot; compaction by threshold and by timer; malformed text, schema violations,
-binary frames, oversized messages, a missing or bad `hello`, invalid operations and a silent
+binary frames that are not batches, oversized messages, a missing or bad `hello`, invalid operations and a silent
 connection are rejected and close the connection while other clients keep syncing; `/healthz`.
 
 **Not yet:** no heartbeat (a dead TCP connection is noticed only when the OS gives up on it), no limit
@@ -794,9 +832,9 @@ the product makes, that everyone ends with the same board.
 
 - **What runs.** `pnpm e2e` runs Playwright with one worker and a Chromium project. Its `webServer`
   builds the web app into `e2e/dist/web` with `VITE_SYNC_URL` pointing at the test server, and serves
-  it with `vite preview` on port 22111. A worker-scoped auto fixture, `syncServer`, starts the real
+  it with `vite preview` on port 22151. A worker-scoped auto fixture, `syncServer`, starts the real
   server (`node --import tsx apps/server/src/main.ts`, so that killing the process kills the server;
-  `tsx` on its own would leave a child behind) on port 22110 with an empty database under `.data/`
+  `tsx` on its own would leave a child behind) on port 22150 with an empty database under `.data/`
   and with `DRIFTBOARD_COMPACT_AFTER_OPS=50`, so that boards are folded into snapshots and a restart
   loads from one. Both ports differ from the dev servers' (22100 to 22102).
 - **People.** Fixture `openBoard('ann', 'ben', 'cat')` makes a board on the front page and opens it
@@ -852,5 +890,5 @@ Everything runs inside the repository folder: Node is pinned in `.nvmrc` and `en
 pinned by the `packageManager` field and run through corepack, the pnpm store is `./.pnpm-store`,
 SQLite databases live in `./.data/`, and Playwright's Chromium is installed into the project with
 `PLAYWRIGHT_BROWSERS_PATH=0` (`pnpm e2e:install`). Dev servers use loopback ports 22100–22199 (sync
-server 22100, Vite dev server 22101, Vite preview 22102); the end-to-end suite uses 22110 and 22111,
+server 22100, Vite dev server 22101, Vite preview 22102); the end-to-end suite uses 22150 and 22151,
 and the unit test of `SyncServer` 22195.

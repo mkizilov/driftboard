@@ -13,11 +13,12 @@ import {
   PROTOCOL_VERSION,
   authorOps,
   emptyStore,
+  encodeFrame,
   encodeMessage,
   flush,
   isSynced,
   openInitiator,
-  parseMessage,
+  parseFrame,
   receive,
   storeSize,
   storeVector,
@@ -111,8 +112,8 @@ class TestClient {
     const socket = new WebSocket(this.url);
     this.socket = socket;
     this.closeCode = null;
-    socket.on('message', (data) => {
-      this.#onMessage(socket, data.toString());
+    socket.on('message', (data, isBinary) => {
+      this.#onMessage(socket, isBinary ? new Uint8Array(data as Buffer) : data.toString());
     });
     socket.on('close', (code) => {
       if (this.socket !== socket) return;
@@ -129,7 +130,7 @@ class TestClient {
     });
     const open = openInitiator({ self: this.id, boardId: this.boardId }, this.store);
     this.session = open.session;
-    for (const message of open.send) socket.send(encodeMessage(message));
+    for (const message of open.send) socket.send(encodeFrame(message));
   }
 
   async disconnect(): Promise<void> {
@@ -146,11 +147,11 @@ class TestClient {
     if (this.session === null || this.socket === null) return;
     const flushed = flush(this.session, this.store);
     this.session = flushed.session;
-    for (const message of flushed.send) this.socket.send(encodeMessage(message));
+    for (const message of flushed.send) this.socket.send(encodeFrame(message));
   }
 
-  #onMessage(socket: WebSocket, text: string): void {
-    const parsed = parseMessage(text);
+  #onMessage(socket: WebSocket, frame: string | Uint8Array): void {
+    const parsed = parseFrame(frame);
     if (!parsed.ok) throw new Error(`the server sent an invalid message: ${parsed.error}`);
     if (this.session === null || this.socket !== socket) return;
     if (parsed.message.type === 'ops') this.opsReceived += parsed.message.ops.length;
@@ -159,7 +160,7 @@ class TestClient {
     this.store = step.store;
     if (step.applied.length > 0) this.board.applyRemote(toBoardOps(step.applied));
     if (step.presence !== null) this.presence.push(step.presence);
-    for (const reply of step.send) socket.send(encodeMessage(reply));
+    for (const reply of step.send) socket.send(encodeFrame(reply));
   }
 }
 
@@ -189,8 +190,8 @@ class RawSocket {
   private constructor(socket: WebSocket) {
     this.socket = socket;
     this.closed = new Promise<number>((resolve) => socket.once('close', (code) => resolve(code)));
-    socket.on('message', (data) => {
-      const parsed = parseMessage(data.toString());
+    socket.on('message', (data, isBinary) => {
+      const parsed = parseFrame(isBinary ? new Uint8Array(data as Buffer) : data.toString());
       if (parsed.ok) this.messages.push(parsed.message);
     });
     socket.on('error', () => undefined);
@@ -474,7 +475,7 @@ describe('malformed input', () => {
     });
   }
 
-  it('rejects binary frames', async () => {
+  it('rejects binary frames that are not a batch of operations', async () => {
     const { url } = await startInMemory();
     const raw = await RawSocket.open(url);
     raw.send(Buffer.from([1, 2, 3]));

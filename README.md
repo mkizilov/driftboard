@@ -44,13 +44,18 @@ This is *presence*: it is never stored, is sent at most 20 times a second, and s
 nothing for 6 seconds drops off the list.
 
 The end-to-end suite (`e2e/`, Playwright) starts the real sync server and the production web build
-on loopback ports 22110 and 22111 and opens two or three browser contexts on one board. Its specs
+on loopback ports 22150 and 22151 and opens two or three browser contexts on one board. Its specs
 type in the same note at once, move the same note at once, take one context offline with
 `context.setOffline(true)`, restart or kill the server mid-session and reload the page, and a
 randomized monkey test does 200 random actions across three contexts; every test ends by checking
 that all contexts show identical boards. `E2E_SEED=n pnpm e2e` repeats a monkey run and
 `E2E_MONKEY_RUNS=n pnpm e2e` makes n runs on consecutive seeds. A failed test keeps a Playwright
 trace per person in `e2e/test-results/`.
+
+Performance: `PERFORMANCE.md` has the numbers before and after the work on the text sequence and the
+binary encoding of operations (100,000 local edits: 264 s to 76 ms; a sync of 120,000 operations: 17.6
+MB to 437 KB), and what it would take to garbage-collect tombstones. `pnpm bench:report` reproduces
+the tables and `pnpm bench` runs the same scenarios under `vitest bench`.
 
 Requires Node 22 (`.nvmrc`). Everything stays inside this folder: dependencies in `node_modules`,
 the pnpm store in `.pnpm-store`, SQLite databases in `.data/`.

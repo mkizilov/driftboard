@@ -1,7 +1,8 @@
 import { VersionVector } from '@driftboard/crdt';
 import {
   PROTOCOL_VERSION,
-  parseMessage,
+  parseFrame,
+  type Frame,
   type Presence,
   type PresenceState,
   type StampedOp,
@@ -62,10 +63,10 @@ function setup(random: () => number = () => 0) {
 }
 
 /** `origin:seq` of every operation in the `ops` messages among `frames`. */
-function opKeys(frames: readonly string[]): string[] {
+function opKeys(frames: readonly Frame[]): string[] {
   const keys: string[] = [];
   for (const frame of frames) {
-    const parsed = parseMessage(frame);
+    const parsed = parseFrame(frame);
     if (parsed.ok && parsed.message.type === 'ops') {
       for (const op of parsed.message.ops) keys.push(`${op.origin}:${op.seq}`);
     }
@@ -95,7 +96,7 @@ describe('SyncConnection: connecting', () => {
     const a = client(1);
     a.connection.start();
     net.open(latest());
-    const hello = parseMessage(must(latest().sent[0]));
+    const hello = parseFrame(must(latest().sent[0]));
     expect(hello.ok ? hello.message : undefined).toMatchObject({
       type: 'hello',
       replicaId: a.board.replicaId,
@@ -240,7 +241,7 @@ describe('SyncConnection: syncing', () => {
     expect(hasNoDuplicates(sentByA)).toBe(true);
     // The new hello says what A holds, so the server does not send A its own operations back.
     expect(opKeys(secondA.received).some((key) => sentByA.includes(key))).toBe(false);
-    const hello = parseMessage(must(secondA.sent[0]));
+    const hello = parseFrame(must(secondA.sent[0]));
     const vector = hello.ok && hello.message.type === 'hello' ? hello.message.versionVector : [];
     expect(vector.length).toBeGreaterThan(0);
   });
@@ -349,13 +350,37 @@ describe('SyncConnection: a server that misbehaves', () => {
     expect(timers.delays).toHaveLength(1);
   });
 
-  it('drops a connection that sends something that is not text', () => {
+  it('drops a connection that sends bytes that are not a batch of operations', () => {
     const { net, client, online } = setup();
     const a = client(1);
     const socket = online(a);
     net.inject(socket, new ArrayBuffer(4));
     expect(socket.closed).toBe(true);
-    expect(a.connection.lastError).toContain('not text');
+    expect(a.connection.lastError).toContain('invalid message');
+  });
+
+  it('drops a connection that sends something that is neither text nor bytes', () => {
+    const { net, client, online } = setup();
+    const a = client(1);
+    const socket = online(a);
+    net.inject(socket, { not: 'a frame' });
+    expect(socket.closed).toBe(true);
+    expect(a.connection.lastError).toContain('neither text nor bytes');
+  });
+
+  it('takes the operations of the server as bytes, whether they come as an ArrayBuffer or a view', () => {
+    const { net, client, online } = setup();
+    const a = client(1);
+    const b = client(2);
+    online(a);
+    const socketB = online(b);
+    const id = must(a.store.createNote(3, 4));
+    expect(b.board.getNote(id)).toMatchObject({ x: 3, y: 4 });
+    // What the server relayed to B was a binary frame, and B read it.
+    expect(socketB.received.some((frame) => typeof frame !== 'string')).toBe(true);
+    expect(net.sockets.some((socket) => socket.sent.some((frame) => typeof frame !== 'string'))).toBe(
+      true,
+    );
   });
 
   it('reports the reason when the server turns the client away', () => {
@@ -828,7 +853,7 @@ describe('SyncConnection: presence', () => {
     const socket = harness.online(a);
     const state = here('A', { cursor: { x: 3, y: 4 }, editing: '1@a' });
     expect(a.connection.sendPresence(state)).toBe(true);
-    const sent = parseMessage(must(socket.sent.at(-1)));
+    const sent = parseFrame(must(socket.sent.at(-1)));
     expect(sent.ok ? sent.message : undefined).toEqual({
       type: 'presence',
       replicaId: a.board.replicaId,

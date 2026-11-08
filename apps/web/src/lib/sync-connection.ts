@@ -2,12 +2,13 @@ import { VersionVector, type Board, type BoardOp, type ReplicaId } from '@driftb
 import {
   authorOps,
   emptyStore,
-  encodeMessage,
+  encodeFrame,
   flush,
   openInitiator,
-  parseMessage,
+  parseFrame,
   receive,
   toBoardOps,
+  type Frame,
   type OpStore,
   type Presence,
   type PresenceState,
@@ -35,13 +36,14 @@ export function countPending(store: OpStore, held: VersionVector): number {
 
 /** What the connection needs from a WebSocket, so that tests can stand in for it. */
 export interface SocketLike {
-  send(text: string): void;
+  /** A string goes out as a text frame, bytes as a binary frame. */
+  send(frame: Frame): void;
   close(): void;
 }
 
 export interface SocketHandlers {
   open(): void;
-  /** A message arrived; anything but text is a protocol violation. */
+  /** A message arrived: a string (text frame) or an `ArrayBuffer` (binary frame). */
   message(data: unknown): void;
   /** The connection ended or could not be made. Always follows a failure. */
   close(): void;
@@ -52,6 +54,8 @@ export type SocketFactory = (url: string, handlers: SocketHandlers) => SocketLik
 /** The browser's WebSocket. */
 export const browserSocket: SocketFactory = (url, handlers) => {
   const socket = new WebSocket(url);
+  // Binary frames (operations) are handed over as ArrayBuffers rather than Blobs.
+  socket.binaryType = 'arraybuffer';
   socket.addEventListener('open', () => {
     handlers.open();
   });
@@ -64,8 +68,8 @@ export const browserSocket: SocketFactory = (url, handlers) => {
   // A failed connection is always followed by a 'close' event, which does the work.
   socket.addEventListener('error', () => undefined);
   return {
-    send: (text) => {
-      socket.send(text);
+    send: (frame) => {
+      socket.send(frame);
     },
     close: () => {
       socket.close();
@@ -194,7 +198,7 @@ export class SyncConnection {
   sendPresence(state: PresenceState | null): boolean {
     if (this.#session === null || this.#session.phase !== 'ready') return false;
     const replicaId = this.#options.replicaId;
-    this.#send(encodeMessage({ type: 'presence', replicaId, state }));
+    this.#send(encodeFrame({ type: 'presence', replicaId, state }));
     return true;
   }
 
@@ -272,16 +276,16 @@ export class SyncConnection {
       this.#store,
     );
     this.#session = open.session;
-    for (const message of open.send) this.#send(encodeMessage(message));
+    for (const message of open.send) this.#send(encodeFrame(message));
   }
 
   #onMessage(data: unknown): void {
     if (this.#session === null) return;
-    if (typeof data !== 'string') {
-      this.#fail('the server sent a message that is not text');
+    if (typeof data !== 'string' && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)) {
+      this.#fail('the server sent a message that is neither text nor bytes');
       return;
     }
-    const parsed = parseMessage(data);
+    const parsed = parseFrame(data);
     if (!parsed.ok) {
       this.#fail(`the server sent an invalid message: ${parsed.error}`);
       return;
@@ -300,7 +304,7 @@ export class SyncConnection {
         return;
       }
     }
-    for (const message of step.send) this.#send(encodeMessage(message));
+    for (const message of step.send) this.#send(encodeFrame(message));
     if (step.peerError !== null) {
       this.#fail(`the server rejected the connection: ${step.peerError.message}`);
       return;
@@ -353,10 +357,10 @@ export class SyncConnection {
     if (this.#session === null || this.#session.phase !== 'ready') return;
     const flushed = flush(this.#session, this.#store);
     this.#session = flushed.session;
-    for (const message of flushed.send) this.#send(encodeMessage(message));
+    for (const message of flushed.send) this.#send(encodeFrame(message));
   }
 
-  #send(text: string): void {
-    this.#socket?.send(text);
+  #send(frame: Frame): void {
+    this.#socket?.send(frame);
   }
 }

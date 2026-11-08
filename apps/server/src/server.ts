@@ -33,10 +33,10 @@ export interface SyncServer {
   close(): Promise<void>;
 }
 
-function toText(data: WebSocket.RawData): string {
-  if (Array.isArray(data)) return Buffer.concat(data).toString('utf8');
-  if (data instanceof ArrayBuffer) return Buffer.from(data).toString('utf8');
-  return data.toString('utf8');
+function toBytes(data: WebSocket.RawData): Buffer {
+  if (Array.isArray(data)) return Buffer.concat(data);
+  if (data instanceof ArrayBuffer) return Buffer.from(data);
+  return data;
 }
 
 function json(res: ServerResponse, status: number, body: unknown): void {
@@ -99,15 +99,16 @@ export function startSyncServer(options: SyncServerOptions): Promise<SyncServer>
 
   wss.on('connection', (ws) => {
     const connection = hub.accept({
-      send: (text) => {
-        if (ws.readyState === WebSocket.OPEN) ws.send(text);
+      send: (frame) => {
+        if (ws.readyState === WebSocket.OPEN) ws.send(frame);
       },
       close: (code, reason) => {
         ws.close(code, reason);
       },
     });
     ws.on('message', (data, isBinary) => {
-      connection.receive(isBinary ? '' : toText(data), isBinary);
+      const bytes = toBytes(data);
+      connection.receive(isBinary ? bytes : bytes.toString('utf8'), isBinary);
     });
     // `ws` reports a bad frame (for example one over `maxPayload`) here and then closes the
     // connection itself with the matching code, so the 'close' event below does the cleanup.

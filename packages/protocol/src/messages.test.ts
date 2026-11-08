@@ -7,7 +7,10 @@ import {
   MAX_NOTE_ID_LENGTH,
   MAX_OPS_PER_MESSAGE,
   PROTOCOL_VERSION,
+  encodeFrame,
   encodeMessage,
+  encodeOps,
+  parseFrame,
   parseMessage,
   type Message,
 } from './index';
@@ -198,5 +201,60 @@ describe('message parsing', () => {
       const error = messages[7] as Message;
       expect(parseMessage(altered(error, (j) => (j['code'] = 'whoops'))).ok).toBe(false);
     });
+  });
+});
+
+describe('frames', () => {
+  it('send operations as a binary frame and every other message as JSON text', () => {
+    for (const message of messages) {
+      const frame = encodeFrame(message);
+      expect(typeof frame).toBe(message.type === 'ops' ? 'object' : 'string');
+      if (typeof frame === 'string') expect(frame).toBe(encodeMessage(message));
+    }
+  });
+
+  it('round-trip every kind of message', () => {
+    for (const message of messages) {
+      expect(parseFrame(encodeFrame(message))).toEqual({ ok: true, message });
+    }
+  });
+
+  it('read binary frames however the transport hands them over: bytes, a Buffer view or an ArrayBuffer', () => {
+    const ops = { type: 'ops', ops: stamped(a, 1, 5) } as const;
+    const bytes = encodeOps(ops.ops);
+    expect(parseFrame(bytes)).toEqual({ ok: true, message: ops });
+    expect(parseFrame(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length))).toEqual({
+      ok: true,
+      message: ops,
+    });
+    // A view into a larger buffer, as `ws` gives for a message that is part of a bigger read.
+    const padded = new Uint8Array(bytes.length + 7);
+    padded.set(bytes, 4);
+    expect(parseFrame(padded.subarray(4, 4 + bytes.length))).toEqual({ ok: true, message: ops });
+  });
+
+  it('still read operations sent as JSON text, which is what the other kinds of message are', () => {
+    const ops: Message = { type: 'ops', ops: stamped(a, 1, 2) };
+    expect(parseFrame(encodeMessage(ops))).toEqual({ ok: true, message: ops });
+  });
+
+  it('reject a binary frame that is damaged, empty, too big or too long a batch, without throwing', () => {
+    const bytes = encodeOps(stamped(a, 1, 3));
+    for (let length = 0; length < bytes.length; length += 1) {
+      expect(parseFrame(bytes.slice(0, length)).ok).toBe(false);
+    }
+    expect(parseFrame(encodeOps([]))).toEqual({ ok: false, error: 'ops: no operations' });
+    expect(parseFrame(new Uint8Array(MAX_FRAME_BYTES + 1))).toEqual({
+      ok: false,
+      error: 'frame too large',
+    });
+    expect(parseFrame(encodeOps(stamped(a, 1, MAX_OPS_PER_MESSAGE)))).toMatchObject({ ok: true });
+    expect(parseFrame(encodeOps(stamped(a, 1, MAX_OPS_PER_MESSAGE + 1))).ok).toBe(false);
+    fc.assert(
+      fc.property(fc.uint8Array({ maxLength: 60 }), (junk) => {
+        expect(typeof parseFrame(junk).ok).toBe('boolean');
+      }),
+      { numRuns: 300 },
+    );
   });
 });

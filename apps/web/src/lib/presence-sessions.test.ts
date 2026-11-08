@@ -32,7 +32,8 @@ const shown = (peer: Peer) => ({
 
 /** How many presence messages a socket carried. */
 const presenceFrames = (socket: FakeSocket) =>
-  socket.sent.filter((frame) => frame.includes('"type":"presence"')).length;
+  socket.sent.filter((frame) => typeof frame === 'string' && frame.includes('"type":"presence"'))
+    .length;
 
 describe('seeing each other', () => {
   it('shows the other people, with their names, colours and where their pointers are', async () => {

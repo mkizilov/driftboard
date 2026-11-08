@@ -2,13 +2,15 @@ import { replicaId, type ReplicaId } from '@driftboard/crdt';
 import {
   MAX_FRAME_BYTES,
   createRoom,
+  encodeFrame,
   encodeMessage,
   errorMessage,
-  parseMessage,
+  parseFrame,
   roomConnect,
   roomDisconnect,
   roomReceive,
   type ErrorCode,
+  type Frame,
   type Message,
   type Room,
   type RoomStep,
@@ -29,14 +31,15 @@ export const CLOSE = {
 
 /** What the hub needs from a connection; the WebSocket server adapts `ws` to this. */
 export interface HubSocket {
-  send(text: string): void;
+  /** A string goes out as a text frame, bytes as a binary frame. */
+  send(frame: Frame): void;
   close(code: number, reason: string): void;
 }
 
 /** What the transport tells the hub about one connection. */
 export interface HubConnection {
-  /** A frame arrived. `data` is the text of a text frame; for a binary frame it is ignored. */
-  receive(data: string, isBinary: boolean): void;
+  /** A frame arrived: the text of a text frame, or the bytes of a binary frame. */
+  receive(data: string | Uint8Array, isBinary: boolean): void;
   /** The connection ended (or the hub already closed it); safe to call more than once. */
   closed(): void;
   /** Whether a valid `hello` has been accepted. */
@@ -84,9 +87,10 @@ interface LiveRoom {
  * own: it receives frames, runs the pure sync logic of `@driftboard/protocol`, writes new
  * operations to storage *before* anything is sent about them, and sends the resulting messages.
  *
- * Every frame is checked before it reaches the sync logic: text only, within the size limit, valid
- * JSON, valid against the zod schemas. A connection that sends anything else, or something out of
- * turn, gets one `error` message and is closed.
+ * Every frame is checked before it reaches the sync logic: within the size limit, and either JSON
+ * text valid against the zod schemas or a binary batch of operations (see `binary.ts` in
+ * `@driftboard/protocol`). A connection that sends anything else, or something out of turn, gets
+ * one `error` message and is closed.
  */
 export class SyncHub {
   readonly #storage: BoardStorage;
@@ -174,19 +178,22 @@ export class SyncHub {
 
   // ---- Frames ---------------------------------------------------------------------------------
 
-  #receive(conn: Conn, data: string, isBinary: boolean): void {
+  #receive(conn: Conn, data: string | Uint8Array, isBinary: boolean): void {
     if (conn.done) return;
-    if (isBinary) {
-      this.#fail(conn, 'invalid_message', CLOSE.unsupportedData, 'binary frames are not supported');
+    if (isBinary !== (typeof data !== 'string')) {
+      this.#fail(conn, 'invalid_message', CLOSE.unsupportedData, 'frame type and data disagree');
       return;
     }
-    if (Buffer.byteLength(data) > this.#maxMessageBytes) {
+    const size = typeof data === 'string' ? Buffer.byteLength(data) : data.byteLength;
+    if (size > this.#maxMessageBytes) {
       this.#fail(conn, 'invalid_message', CLOSE.tooBig, 'message too large');
       return;
     }
-    const parsed = parseMessage(data);
+    const parsed = parseFrame(data);
     if (!parsed.ok) {
-      this.#fail(conn, 'invalid_message', CLOSE.policyViolation, parsed.error);
+      // Binary data that is not a batch of operations is data the server cannot take at all.
+      const closeCode = isBinary ? CLOSE.unsupportedData : CLOSE.policyViolation;
+      this.#fail(conn, 'invalid_message', closeCode, parsed.error);
       return;
     }
     try {
@@ -249,7 +256,7 @@ export class SyncHub {
   #dispatch(live: LiveRoom, step: RoomStep, origin: Conn): void {
     for (const { conn: id, message } of step.send) {
       const target = live.conns.get(id);
-      if (target !== undefined && !target.done) target.socket.send(encodeMessage(message));
+      if (target !== undefined && !target.done) target.socket.send(encodeFrame(message));
     }
     for (const id of step.close) {
       const target = live.conns.get(id);

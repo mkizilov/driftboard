@@ -1,8 +1,9 @@
 /**
  * The version both sides must speak. 2: presence carries the person's name, colour and the note
- * they are editing (it used to carry a list of selected notes).
+ * they are editing (it used to carry a list of selected notes). 3: operations travel in binary
+ * frames (`encodeFrame`, see `binary.ts`) instead of JSON text; the other messages are still text.
  */
-export const PROTOCOL_VERSION = 2;
+export const PROTOCOL_VERSION = 3;
 
 /** Largest number of operations in one `ops` message; larger batches are split. */
 export const MAX_OPS_PER_MESSAGE = 500;

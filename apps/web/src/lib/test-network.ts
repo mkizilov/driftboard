@@ -2,12 +2,13 @@ import { generateReplicaId } from '@driftboard/crdt';
 import {
   ERROR_CODES,
   createRoom,
-  encodeMessage,
+  encodeFrame,
   generateBoardId,
-  parseMessage,
+  parseFrame,
   roomConnect,
   roomDisconnect,
   roomReceive,
+  type Frame,
   type Message,
   type Outgoing,
   type Room,
@@ -19,10 +20,10 @@ export class FakeSocket implements SocketLike {
   readonly url: string;
   readonly conn: string;
   readonly handlers: SocketHandlers;
-  /** Text frames the client sent. */
-  readonly sent: string[] = [];
-  /** Text frames the server delivered. */
-  readonly received: string[] = [];
+  /** Frames the client sent: text, or bytes for operations. */
+  readonly sent: Frame[] = [];
+  /** Frames the server delivered, in the same two kinds. */
+  readonly received: Frame[] = [];
   closed = false;
   /** Set when `close` was asked for but, as on a dead connection, has not happened yet. */
   closing = false;
@@ -37,10 +38,10 @@ export class FakeSocket implements SocketLike {
     this.handlers = handlers;
   }
 
-  send(text: string): void {
+  send(frame: Frame): void {
     if (this.closed) return;
-    this.sent.push(text);
-    this.#network.fromClient(this, text);
+    this.sent.push(frame);
+    this.#network.fromClient(this, frame);
   }
 
   /** The client closes the connection. */
@@ -65,8 +66,9 @@ export class FakeSocket implements SocketLike {
 
 /**
  * A sync server for one board, made of the protocol's real `Room`, and the connections to it.
- * Frames travel as the text the real encoder and parser produce. Nothing is asynchronous: a frame
- * is handled before `send` returns, so tests stay deterministic.
+ * Frames travel as the text or bytes the real encoder and parser produce (the server's bytes reach
+ * the client as an `ArrayBuffer`, as a browser's WebSocket delivers them). Nothing is
+ * asynchronous: a frame is handled before `send` returns, so tests stay deterministic.
  */
 export class FakeNetwork {
   room: Room;
@@ -128,13 +130,13 @@ export class FakeNetwork {
 
   /** Delivers a well-formed message from the server. */
   injectMessage(socket: FakeSocket, message: Message): void {
-    const text = encodeMessage(message);
-    socket.received.push(text);
-    socket.handlers.message(text);
+    const frame = encodeFrame(message);
+    socket.received.push(frame);
+    socket.handlers.message(typeof frame === 'string' ? frame : new Uint8Array(frame).buffer);
   }
 
-  fromClient(socket: FakeSocket, text: string): void {
-    const parsed = parseMessage(text);
+  fromClient(socket: FakeSocket, frame: Frame): void {
+    const parsed = parseFrame(frame);
     if (!parsed.ok) throw new Error(`the client sent an invalid message: ${parsed.error}`);
     const step = roomReceive(this.room, socket.conn, parsed.message);
     this.room = step.room;

@@ -18,6 +18,8 @@
     "format:check": "prettier --check .",
     "e2e:install": "pnpm --filter @driftboard/e2e install:browsers",
     "e2e": "pnpm --filter @driftboard/e2e e2e",
+    "bench": "pnpm --filter @driftboard/bench bench",
+    "bench:report": "pnpm --filter @driftboard/bench report",
     "check": "pnpm lint && pnpm typecheck && pnpm test",
     "check:all": "pnpm check && pnpm e2e"
   },

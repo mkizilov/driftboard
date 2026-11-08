@@ -1,15 +1,18 @@
 import { Board, createManualClock, replicaId, type ReplicaId } from '@driftboard/crdt';
 import {
+  MAX_OPS_PER_MESSAGE,
   PROTOCOL_VERSION,
   authorOps,
   emptyStore,
+  encodeFrame,
   encodeMessage,
   flush,
   openInitiator,
-  parseMessage,
+  parseFrame,
   receive,
   storeSize,
   storeVector,
+  type Frame,
   type Message,
   type OpStore,
   type Session,
@@ -53,13 +56,16 @@ function newHub(options: Partial<HubOptions> = {}): SyncHub {
 
 class FakeSocket implements HubSocket {
   readonly sent: Message[] = [];
+  readonly frames: Frame[] = [];
   closed: { code: number; reason: string } | null = null;
   /** Called with each message as it is sent, to look at the world at that moment. */
   onSend: ((message: Message) => void) | undefined;
 
-  send(text: string): void {
-    const parsed = parseMessage(text);
+  /** Every frame the hub sends is parsed the way a client does: operations arrive as binary. */
+  send(frame: Frame): void {
+    const parsed = parseFrame(frame);
     if (!parsed.ok) throw new Error(`the hub sent an invalid message: ${parsed.error}`);
+    this.frames.push(frame);
     this.onSend?.(parsed.message);
     this.sent.push(parsed.message);
   }
@@ -99,8 +105,10 @@ class Peer {
     this.board = new Board({ replicaId: id, clock: createManualClock(1000) });
   }
 
+  /** Sends a message the way a client does: operations as a binary frame, the rest as text. */
   say(message: Message): void {
-    this.conn.receive(encodeMessage(message), false);
+    const frame = encodeFrame(message);
+    this.conn.receive(frame, typeof frame !== 'string');
   }
 
   hello(): void {
@@ -412,9 +420,9 @@ describe('invalid data closes the connection', () => {
     expect(peer.socket.closed?.code).toBe(closeCode);
   }
 
-  const raw = (hub: SyncHub, text: string, isBinary = false): Peer => {
+  const raw = (hub: SyncHub, data: string | Uint8Array, isBinary = false): Peer => {
     const peer = new Peer(hub, a, BOARD);
-    peer.conn.receive(text, isBinary);
+    peer.conn.receive(data, isBinary);
     return peer;
   };
 
@@ -428,18 +436,44 @@ describe('invalid data closes the connection', () => {
     expect(hub.roomCount).toBe(0);
   });
 
-  it('binary frames', () => {
-    const peer = raw(newHub(), '', true);
-    expectRejected(peer, 'invalid_message', CLOSE.unsupportedData);
+  it('binary frames that are not a batch of operations', () => {
+    const batch = encodeFrame({ type: 'ops', ops: stamped(a, 1, 3) });
+    if (typeof batch === 'string') throw new Error('operations should be a binary frame');
+    const frames = [
+      new Uint8Array(),
+      Uint8Array.from([1, 2, 3]),
+      batch.subarray(0, batch.length - 1),
+      Uint8Array.from([...batch, 0]),
+      Uint8Array.from(Buffer.from('{"type":"ack","versionVector":[]}')),
+    ];
+    for (const frame of frames) {
+      expectRejected(raw(newHub(), frame, true), 'invalid_message', CLOSE.unsupportedData);
+    }
   });
 
-  it('messages over the size limit, even valid ones', () => {
+  it('a frame whose kind and data disagree', () => {
+    expectRejected(raw(newHub(), '', true), 'invalid_message', CLOSE.unsupportedData);
+    expectRejected(raw(newHub(), new Uint8Array([0xdb, 1, 0]), false), 'invalid_message', CLOSE.unsupportedData);
+  });
+
+  it('messages over the size limit, even valid ones, as text or as bytes', () => {
     const hub = newHub({ maxMessageBytes: 2000 });
     const message = encodeMessage({ type: 'ops', ops: stamped(a, 1, 40) });
     expect(Buffer.byteLength(message)).toBeGreaterThan(2000);
     expectRejected(raw(hub, message), 'invalid_message', CLOSE.tooBig);
     const within = encodeMessage({ type: 'ack', versionVector: [] });
     expect(Buffer.byteLength(within)).toBeLessThan(2000);
+    const small = newHub({ maxMessageBytes: 100 });
+    const bytes = encodeFrame({ type: 'ops', ops: stamped(a, 1, 40) });
+    if (typeof bytes === 'string') throw new Error('operations should be a binary frame');
+    expect(bytes.length).toBeGreaterThan(100);
+    expectRejected(raw(small, bytes, true), 'invalid_message', CLOSE.tooBig);
+  });
+
+  it('a binary batch of more operations than one message may hold', () => {
+    const bytes = encodeFrame({ type: 'ops', ops: stamped(a, 1, MAX_OPS_PER_MESSAGE + 1) });
+    if (typeof bytes === 'string') throw new Error('operations should be a binary frame');
+    expectRejected(raw(newHub(), bytes, true), 'invalid_message', CLOSE.unsupportedData);
   });
 
   it('a first message that is not hello', () => {
@@ -479,7 +513,28 @@ describe('invalid data closes the connection', () => {
     const peer = connected(hub, a);
     settle(peer);
     const good = must(stamped(a, 1, 1)[0]);
-    peer.say({ type: 'ops', ops: [good, { origin: a, seq: 2, op: { type: 'note-put' } }] });
+    // As JSON text, where anything can be written down...
+    const message: Message = {
+      type: 'ops',
+      ops: [good, { origin: a, seq: 2, op: { type: 'note-put' } }],
+    };
+    peer.conn.receive(encodeMessage(message), false);
+    expectRejected(peer, 'invalid_message', CLOSE.policyViolation);
+    expect(count('ops')).toBe(0);
+  });
+
+  it('operations that are well-formed binary but not valid board operations', () => {
+    const hub = newHub();
+    const peer = connected(hub, a);
+    settle(peer);
+    const [good, second] = stamped(a, 1, 2);
+    const fields = (must(second).op['fields'] ?? {}) as Record<string, unknown>;
+    const nowhere = {
+      ...must(second),
+      op: { ...must(second).op, fields: { ...fields, x: { value: Number.NaN, at: '000000000001-0000-a' } } },
+    };
+    // ...and as bytes, where a coordinate that is not a number can still be written.
+    peer.say({ type: 'ops', ops: [must(good), nowhere] });
     expectRejected(peer, 'invalid_message', CLOSE.policyViolation);
     expect(count('ops')).toBe(0);
   });

@@ -1,0 +1,26 @@
+{
+  "name": "@driftboard/bench",
+  "version": "0.0.0",
+  "private": true,
+  "description": "driftboard benchmarks: text sequence, board loading, sync after a long offline period, and the size of the wire formats.",
+  "type": "module",
+  "engines": {
+    "node": ">=22.12.0 <23"
+  },
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "vitest run",
+    "bench": "vitest bench --run",
+    "report": "node --expose-gc --import tsx src/report.ts"
+  },
+  "dependencies": {
+    "@driftboard/crdt": "workspace:*",
+    "@driftboard/protocol": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/node": "22.10.2",
+    "tsx": "4.19.2",
+    "typescript": "5.7.2",
+    "vitest": "2.1.8"
+  }
+}

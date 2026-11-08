@@ -1,5 +1,6 @@
 import { isReplicaId, type ReplicaId } from '@driftboard/crdt';
 import { z } from 'zod';
+import { BinaryFormatError, decodeOps, encodeOps } from './binary';
 import {
   ERROR_CODES,
   MAX_BOARD_ID_LENGTH,
@@ -135,4 +136,33 @@ export function parseMessage(raw: string): ParseResult<Message> {
 
 export function encodeMessage(message: Message): string {
   return JSON.stringify(message);
+}
+
+/**
+ * What goes over a WebSocket: a text frame of JSON, or a binary frame. Operations are the bulk of
+ * the traffic and are sent as a binary frame (see `binary.ts`); everything else is JSON text.
+ */
+export type Frame = string | Uint8Array;
+
+export function encodeFrame(message: Message): Frame {
+  return message.type === 'ops' ? encodeOps(message.ops) : encodeMessage(message);
+}
+
+/**
+ * Parses one frame, text or binary, as the transports hand it over (a string, a `Uint8Array` or
+ * `Buffer`, or an `ArrayBuffer`). A text frame is any message in its JSON form, `ops` included; a
+ * binary frame is a batch of operations. Never throws.
+ */
+export function parseFrame(frame: string | Uint8Array | ArrayBuffer): ParseResult<Message> {
+  if (typeof frame === 'string') return parseMessage(frame);
+  const bytes = frame instanceof Uint8Array ? frame : new Uint8Array(frame);
+  if (bytes.length > MAX_FRAME_BYTES) return { ok: false, error: 'frame too large' };
+  try {
+    const ops = decodeOps(bytes, MAX_OPS_PER_MESSAGE);
+    if (ops.length === 0) return { ok: false, error: 'ops: no operations' };
+    return { ok: true, message: { type: 'ops', ops } };
+  } catch (error) {
+    if (!(error instanceof BinaryFormatError)) throw error;
+    return { ok: false, error: error.message.slice(0, MAX_ERROR_MESSAGE_LENGTH) };
+  }
 }

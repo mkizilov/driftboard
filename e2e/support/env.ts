@@ -4,8 +4,8 @@ import { fileURLToPath } from 'node:url';
  * Where the suite runs. Ports are loopback ones from the project's range and are not the ones the
  * dev servers use (22100 to 22102), so a suite can run while the app is being developed.
  */
-export const SYNC_PORT = 22110;
-export const WEB_PORT = 22111;
+export const SYNC_PORT = 22150;
+export const WEB_PORT = 22151;
 export const WEB_URL = `http://127.0.0.1:${WEB_PORT}`;
 /** Where the web app under test is told to find the sync server (`VITE_SYNC_URL`). */
 export const SYNC_URL = `ws://127.0.0.1:${SYNC_PORT}/ws`;

@@ -22,11 +22,12 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
-| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), `BoardHistory` (undo and redo of the local user's own changes by inverse operations), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
-| `packages/protocol` | Sync messages validated with zod (`hello`, `ops`, `ack`, `presence`, `error`; protocol version 2) and the sync logic as pure functions: operation store, per-connection session, server `Room` (which also remembers each present replica's latest presence in memory, to tell newcomers). Depends on `@driftboard/crdt`. |
-| `apps/server`       | Node 22 sync server: `ws` WebSockets (one room per unguessable board id, using the protocol's `Room`), `GET /healthz`, `better-sqlite3` in `./.data/` with each board's log as a compacted snapshot plus a tail. |
+| `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`, whose index lookups run on an order-statistic B+ tree, `order-tree.ts`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), `BoardHistory` (undo and redo of the local user's own changes by inverse operations), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
+| `packages/protocol` | Sync messages validated with zod (`hello`, `ops`, `ack`, `presence`, `error`; protocol version 3: `ops` travel as binary frames, `encodeFrame`/`parseFrame`, the compact encoding of operations in `binary.ts` and `bytes.ts`) and the sync logic as pure functions: operation store, per-connection session, server `Room` (which also remembers each present replica's latest presence in memory, to tell newcomers). Depends on `@driftboard/crdt`. |
+| `apps/server`       | Node 22 sync server: `ws` WebSockets (one room per unguessable board id, using the protocol's `Room`), `GET /healthz`, `better-sqlite3` in `./.data/` with each board's log as a compacted snapshot (gzipped binary batch; version 1 gzipped JSON is still read) plus a tail. |
 | `apps/web`          | React 18 + Vite client: `/` creates a board, `/b/:boardId` is the canvas. Framework-free logic in `src/lib` (text diff, caret, text binding, board store, sync connection, offline storage in IndexedDB through `idb`, write-behind persistence, sync indicator, ephemeral presence: identity, throttled sender, timing-out store; undo/redo keys; viewport, route); thin React in `src/components` and `src/hooks`. Installable offline PWA through `vite-plugin-pwa` (`vite.config.ts`, `src/pwa-manifest.ts`, icons from `scripts/make-icons.mjs`). Component tests use jsdom through `src/test-render.ts`. |
-| `e2e`               | Playwright end-to-end suite (`@driftboard/e2e`). `tests/*.spec.ts` start the real sync server (fixture `syncServer`, `support/sync-server.ts`, port 22110, own database in `.data/`) and the production web build (`vite preview`, port 22111), and drive 2-3 Chromium contexts on one board through `support/person.ts`; every test ends with `expectConverged` (identical boards in all contexts). Specs: concurrent typing, simultaneous moves, `context.setOffline`, server restart/kill, page reload, and a seeded monkey test (200 random actions; `E2E_SEED`, `E2E_MONKEY_RUNS`). The pure helpers in `support/` (seeded rng, monkey plan and runner, board parsing and comparison, geometry, polling, `SyncServer`) have Vitest unit tests that `pnpm test` runs; the specs run only under `pnpm e2e`. |
+| `bench`             | Benchmarks (`@driftboard/bench`): the scenarios (`src/*-scenarios.ts`: 100,000 text operations, a board of 1,000 notes with long texts, a sync after a long offline period, tombstone growth, wire sizes), their `vitest bench` files (`*.bench.ts`), the tests that keep the scenarios honest (`scenarios.test.ts`, run by `pnpm test`) and `report.ts`, which prints the tables of `PERFORMANCE.md`. |
+| `e2e`               | Playwright end-to-end suite (`@driftboard/e2e`). `tests/*.spec.ts` start the real sync server (fixture `syncServer`, `support/sync-server.ts`, port 22150, own database in `.data/`) and the production web build (`vite preview`, port 22151), and drive 2-3 Chromium contexts on one board through `support/person.ts`; every test ends with `expectConverged` (identical boards in all contexts). Specs: concurrent typing, simultaneous moves, `context.setOffline`, server restart/kill, page reload, and a seeded monkey test (200 random actions; `E2E_SEED`, `E2E_MONKEY_RUNS`). The pure helpers in `support/` (seeded rng, monkey plan and runner, board parsing and comparison, geometry, polling, `SyncServer`) have Vitest unit tests that `pnpm test` runs; the specs run only under `pnpm e2e`. |
 
 Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
 separate library build step. The server runs through `tsx`.
@@ -45,6 +46,8 @@ Run from the repository root. Use pnpm through corepack (`corepack enable`); the
 | `pnpm typecheck`   | `tsc --noEmit` in every package.                                           |
 | `pnpm format`      | Prettier write; `pnpm format:check` verifies without writing.              |
 | `pnpm check`       | `pnpm lint && pnpm typecheck && pnpm test`: the local gate.                |
+| `pnpm bench`       | `vitest bench` over `bench/src/*.bench.ts` (heavy; never run here). |
+| `pnpm bench:report`| `bench/src/report.ts`: each scenario once, as Markdown tables, with heap numbers (`--expose-gc`). About 10 s and 2 GB resident on the author's machine. |
 | `pnpm e2e:install` | Install Playwright's Chromium into the project (`PLAYWRIGHT_BROWSERS_PATH=0`). Once. |
 | `pnpm e2e`         | Playwright E2E suite: builds the web app, starts both servers, runs the specs (one worker, a few minutes). |
 | `pnpm check:all`   | `pnpm check && pnpm e2e`: the full local gate.                             |
@@ -53,7 +56,7 @@ Dev servers: `pnpm --filter @driftboard/server dev` (ws://127.0.0.1:22100/ws, `G
 `pnpm --filter @driftboard/web dev` (http://127.0.0.1:22101). Use only loopback ports 22100–22199.
 
 Playwright's browser lives in the project: `pnpm e2e:install` and `pnpm e2e` both set
-`PLAYWRIGHT_BROWSERS_PATH=0`. The suite uses ports 22110 (sync server) and 22111 (web preview), so it
+`PLAYWRIGHT_BROWSERS_PATH=0`. The suite uses ports 22150 (sync server) and 22151 (web preview), so it
 can run next to the dev servers; failed tests keep a trace per person in `e2e/test-results/`
 (`pnpm --filter @driftboard/e2e exec playwright show-trace <file>`).
 
@@ -140,3 +143,15 @@ backoff is up to 15 s; `SYNC_TIMEOUT_MS` is 30 s), and the exact-text assertions
 place when text is inserted before it (a failure there is a finding about the app, not the test).
 Run `pnpm e2e:install` once, then `pnpm e2e`; the monkey test prints its seed in its title and
 attaches its plan and per-action report.
+
+Turn 13 (performance) was again written with no network, and verified on throwaway stand-ins for
+Vitest, fast-check and zod, `node:sqlite` in place of better-sqlite3, and Node 26's type stripping.
+What ran: all CRDT tests (309 before, plus the new `order-tree` and `text-sequence-index` tests),
+all protocol tests (152, with the binary codec and frames), the server's hub, storage, snapshot, db
+and config tests (69), the web `lib` tests that do not need `fake-indexeddb` (382, with binary frames
+through the fake network), the bench scenario tests (15), and `bench/src/report.ts` at full size. What
+did not run: `vitest bench` itself, `apps/server/src/server.test.ts` (real `ws`; it was updated for
+binary frames), the `ws` and browser `WebSocket` binary handling, `storage.test.ts` of the web app
+(needs `fake-indexeddb`), the Playwright suite (it now goes over binary frames and is still
+unrun), and `tsc`/ESLint/Prettier for everything new. Since the `e2e` ports 22110 and 22111 of turn
+12 collided with the range `server.test.ts` reserves (22110-22139), the suite now uses 22150 and 22151.

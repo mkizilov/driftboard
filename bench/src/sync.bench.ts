@@ -3,14 +3,18 @@ import { binaryWire, jsonWire, prepareWorld, reconnect, type World } from './syn
 
 const size = { notes: 200, charsPerNote: 100, offlineOps: 30_000, onlineOps: 10_000 };
 const RUNS = 2;
+// tinybench (2.9, under Vitest 2.1) calls the function once to learn whether it is async, in the
+// warm-up and again in the run, even with no warm-up. Those calls are not timed, and they use up
+// a world like any other.
+const UNTIMED_CALLS = 2;
 
-// A reconnect uses its world up (the boards end up holding everything), so every run needs a
-// fresh one. They are made before the runs, which is why there are only as many as the runs.
+// A reconnect uses its world up (the boards end up holding everything), so every call needs a
+// fresh one. They are made before the runs: the work of making one must not be timed.
 const worlds = new Map<string, World[]>();
 for (const wire of [jsonWire, binaryWire]) {
   worlds.set(
     wire.name,
-    Array.from({ length: RUNS }, () => prepareWorld(11, size)),
+    Array.from({ length: RUNS + UNTIMED_CALLS }, () => prepareWorld(11, size)),
   );
 }
 

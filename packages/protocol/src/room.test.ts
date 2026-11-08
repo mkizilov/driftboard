@@ -13,7 +13,7 @@ import {
 } from './room';
 import { emptyStore, storeVector, type OpStore } from './store';
 import { authorOps, flush, openInitiator, receive, vectorToWire, type Session } from './sync';
-import { stamped, storeOf } from './test-support';
+import { presenceState, stamped, storeOf } from './test-support';
 
 const BOARD = 'board-1';
 const serverId = replicaId('server');
@@ -41,6 +41,8 @@ class Rig {
   /** Labels of the operations sent to each connection (`to:<conn>`) and to the server (`from:<conn>`). */
   readonly sent = new Map<string, string[]>();
   readonly persisted: StampedOp[] = [];
+  /** Types of the messages sent to each connection, in order. */
+  readonly types = new Map<string, string[]>();
   closed: string[] = [];
   #toServer: { conn: string; message: Message }[] = [];
   #toClients: Outgoing[] = [];
@@ -128,6 +130,10 @@ class Rig {
     this.closed.push(...step.close);
     for (const outgoing of step.send) {
       this.#record(`to:${outgoing.conn}`, outgoing.message);
+      this.types.set(outgoing.conn, [
+        ...(this.types.get(outgoing.conn) ?? []),
+        outgoing.message.type,
+      ]);
       this.#toClients.push(outgoing);
     }
   }
@@ -270,7 +276,7 @@ describe('presence through the room', () => {
     const mine: Message = {
       type: 'presence',
       replicaId: a,
-      state: { cursor: { x: 3, y: 4 }, selection: ['1@a'] },
+      state: presenceState({ cursor: { x: 3, y: 4 }, editing: '1@a' }),
     };
     rig.send(ca, mine);
     rig.run();
@@ -292,7 +298,177 @@ describe('presence through the room', () => {
     rig.send(ca, { type: 'presence', replicaId: b, state: null });
     rig.run();
     expect(rig.closed).toEqual([ca.conn]);
-    expect(cb.presence).toEqual([]);
+    // Nothing was said about b; the others only hear that a is gone.
+    expect(cb.presence).toEqual([{ type: 'presence', replicaId: a, state: null }]);
+  });
+
+  describe('telling people who is here', () => {
+    const present = (replica: ReplicaId, change = {}): Message => ({
+      type: 'presence',
+      replicaId: replica,
+      state: presenceState({ name: replica, ...change }),
+    });
+    const hello = (replica: ReplicaId): Message => {
+      const [first] = openInitiator({ self: replica, boardId: BOARD }, emptyStore).send;
+      if (first === undefined) throw new Error('no hello');
+      return first;
+    };
+
+    it('tells a client that joins late who is on the board, after the replies to its hello', () => {
+      const rig = new Rig();
+      const [ca, cb] = [rig.connect(a), rig.connect(b)];
+      rig.run();
+      const mine = present(a, { cursor: { x: 1, y: 2 } });
+      const theirs = present(b, { editing: '1@b' });
+      rig.send(ca, mine);
+      rig.send(cb, theirs);
+      rig.run();
+
+      const cc = rig.connect(c);
+      rig.run();
+      expect(cc.presence).toEqual([mine, theirs]);
+      const types = rig.types.get(cc.conn) ?? [];
+      expect(types[0]).toBe('hello');
+      expect(types.slice(-2)).toEqual(['presence', 'presence']);
+    });
+
+    it('tells a late joiner only the latest state of each replica', () => {
+      const rig = new Rig();
+      const ca = rig.connect(a);
+      rig.run();
+      rig.send(ca, present(a, { cursor: { x: 1, y: 1 } }));
+      rig.send(ca, present(a, { cursor: { x: 9, y: 9 } }));
+      rig.run();
+      const cb = rig.connect(b);
+      rig.run();
+      expect(cb.presence).toEqual([present(a, { cursor: { x: 9, y: 9 } })]);
+    });
+
+    it('does not tell a late joiner about someone who left', () => {
+      const rig = new Rig();
+      const ca = rig.connect(a);
+      rig.run();
+      rig.send(ca, present(a));
+      rig.run();
+      rig.disconnect(ca);
+      rig.run();
+      expect(rig.room.presence.size).toBe(0);
+      const cb = rig.connect(b);
+      rig.run();
+      expect(cb.presence).toEqual([]);
+    });
+
+    it('does not tell a late joiner about someone who cleared their presence', () => {
+      const rig = new Rig();
+      const ca = rig.connect(a);
+      rig.run();
+      rig.send(ca, present(a));
+      rig.send(ca, { type: 'presence', replicaId: a, state: null });
+      rig.run();
+      expect(rig.room.presence.size).toBe(0);
+      const cb = rig.connect(b);
+      rig.run();
+      expect(cb.presence).toEqual([]);
+    });
+
+    it('does not tell a client about itself when it comes back', () => {
+      const rig = new Rig();
+      const [ca, cb] = [rig.connect(a), rig.connect(b)];
+      rig.run();
+      const mine = present(a, { cursor: { x: 5, y: 5 } });
+      rig.send(ca, mine);
+      rig.send(cb, present(b));
+      rig.run();
+
+      const back = rig.connect(a);
+      rig.run();
+      expect(back.presence).toEqual([present(b)]);
+      // Nothing about itself is sent to it, not even to be ignored.
+      const types = rig.types.get(back.conn) ?? [];
+      expect(types.filter((type) => type === 'presence')).toHaveLength(1);
+    });
+
+    it('is a value: a step does not change the room it was given', () => {
+      const rig = new Rig();
+      const [ca] = [rig.connect(a), rig.connect(b)];
+      rig.run();
+      rig.send(ca, present(a));
+      rig.run();
+      const before = rig.room;
+      const snapshot = [...before.presence.keys()];
+
+      const gone = roomReceive(before, ca.conn, { type: 'presence', replicaId: a, state: null });
+      expect([...gone.room.presence.keys()]).toEqual([]);
+      const left = roomDisconnect(before, ca.conn);
+      expect([...left.room.presence.keys()]).toEqual([]);
+      const spoke = roomReceive(before, ca.conn, present(a, { cursor: { x: 1, y: 1 } }));
+      expect(spoke.room.presence).not.toBe(before.presence);
+
+      expect([...before.presence.keys()]).toEqual(snapshot);
+      expect(before.presence.get(a)).toEqual(presenceState({ name: a }));
+      expect(before.sessions.size).toBe(2);
+    });
+
+    it('keeps showing a replica that comes back on a new connection, without announcing a departure', () => {
+      const rig = new Rig();
+      const [ca, cb] = [rig.connect(a), rig.connect(b)];
+      rig.run();
+      const state = presenceState({ name: a });
+      const mine: Message = { type: 'presence', replicaId: a, state };
+      rig.send(ca, mine);
+      rig.run();
+      rig.connect(a);
+      rig.run();
+      expect(cb.presence).toEqual([mine]);
+      expect(rig.room.presence.get(a)).toEqual(state);
+      // The old connection ending later changes nothing either.
+      rig.disconnect(ca);
+      rig.run();
+      expect(cb.presence).toEqual([mine]);
+    });
+
+    it('announces a client that is closed for breaking the protocol, and forgets it', () => {
+      const rig = new Rig();
+      const [ca, cb] = [rig.connect(a), rig.connect(b)];
+      rig.run();
+      const mine = present(a);
+      rig.send(ca, mine);
+      rig.run();
+      rig.send(ca, present(b));
+      rig.run();
+      expect(rig.closed).toEqual([ca.conn]);
+      expect(cb.presence).toEqual([mine, { type: 'presence', replicaId: a, state: null }]);
+      expect(rig.room.presence.size).toBe(0);
+    });
+
+    it('says nothing to a client that has not said hello yet, and tells it when it does', () => {
+      let room = createRoom({ serverId, boardId: BOARD });
+      room = roomConnect(roomConnect(room, 'a'), 'd');
+      room = roomReceive(room, 'a', hello(a)).room;
+      const mine = present(a);
+      const relayed = roomReceive(room, 'a', mine);
+      expect(relayed.send).toEqual([]);
+      const joined = roomReceive(relayed.room, 'd', hello(d));
+      const toD = joined.send.filter((outgoing) => outgoing.message.type === 'presence');
+      expect(toD).toEqual([{ conn: 'd', message: mine }]);
+    });
+
+    it('holds nothing once everyone has gone', () => {
+      const rig = new Rig();
+      const clients = [rig.connect(a), rig.connect(b), rig.connect(c)];
+      rig.run();
+      for (const client of clients) rig.send(client, present(client.id));
+      rig.run();
+      expect(rig.room.presence.size).toBe(3);
+      for (const client of clients) rig.disconnect(client);
+      rig.run();
+      expect(rig.room.presence.size).toBe(0);
+    });
+
+    it('does not change the room when a client that is not there speaks', () => {
+      const room = createRoom({ serverId, boardId: BOARD });
+      expect(roomReceive(room, 'nobody', present(a)).room).toBe(room);
+    });
   });
 
   it('keeps presence out of the operation store', () => {

@@ -1,9 +1,13 @@
 import type { NoteView } from '@driftboard/crdt';
 import type { BoardStore } from './board-store';
+import { IdentityStore } from './identity';
 import { describeSync, type Indicator } from './indicator';
 import { openBoardSession, type BoardSession } from './session';
 import { MemoryDisk } from './storage';
-import { FakeNetwork, FakeTimers, type FakeSocket } from './test-network';
+import type { FakeNetwork, FakeTimers, FakeSocket } from './test-network';
+
+const seededBytes = (seed: number) => (length: number) =>
+  Uint8Array.from({ length }, (_, index) => (seed * 53 + index * 7) % 256);
 
 /**
  * One person's browser for tests: a disk that outlives page loads, timers of its own and a network
@@ -12,7 +16,10 @@ import { FakeNetwork, FakeTimers, type FakeSocket } from './test-network';
  */
 export class Device {
   readonly disk: MemoryDisk;
-  readonly timers = new FakeTimers();
+  /** The network's clock, shared by every device on it. */
+  readonly timers: FakeTimers;
+  /** Who this person is: the same on every page load, as in `localStorage`. */
+  readonly identity: IdentityStore;
   /** Whether this device can reach the server. */
   online = true;
   readonly #net: FakeNetwork;
@@ -26,6 +33,8 @@ export class Device {
     this.#net = net;
     this.#seed = seed;
     this.disk = disk;
+    this.timers = net.timers;
+    this.identity = new IdentityStore(null, seededBytes(seed + 1000));
   }
 
   get page(): BoardSession {
@@ -57,14 +66,15 @@ export class Device {
       boardId: this.#net.boardId,
       url: 'ws://test.invalid/ws',
       storage: this.disk.open(this.#net.boardId),
-      randomBytes: (length) =>
-        Uint8Array.from({ length }, (_, index) => (seed * 53 + index * 7) % 256),
+      randomBytes: seededBytes(seed),
       createSocket: (url, handlers) => {
         const socket = this.#net.connect(url, handlers);
         this.#sockets.push(socket);
         return socket;
       },
       timers: this.timers,
+      elapsed: () => this.timers.now,
+      identity: this.identity,
       random: () => 0,
       retry: { initialMs: 100, maxMs: 1000 },
     });
@@ -92,10 +102,10 @@ export class Device {
     this.#settle();
   }
 
-  /** The network returns: a waiting retry runs and the connection is made. */
+  /** The network returns: like the browser's `online` event, this connects without waiting. */
   goOnline(): void {
     this.online = true;
-    if (this.timers.delays.length > 0) this.timers.fire();
+    this.#current?.connection.retryNow();
     this.#settle();
   }
 

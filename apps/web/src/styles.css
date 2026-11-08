@@ -124,6 +124,120 @@ button {
   white-space: nowrap;
 }
 
+/* ---- Who is here ---- */
+
+.people {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  min-width: 0;
+}
+
+.people ul {
+  display: flex;
+  gap: 0.5rem;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.person {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.3rem;
+  font-size: 0.85rem;
+  white-space: nowrap;
+}
+
+.person .dot {
+  width: 0.7rem;
+  height: 0.7rem;
+  border-radius: 50%;
+  background: var(--peer);
+}
+
+.person-editing {
+  color: #77736a;
+}
+
+.my-name {
+  width: 9rem;
+  padding: 0.1rem 0.3rem;
+  border: 1px solid transparent;
+  border-radius: 0.3rem;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+
+.my-name:hover,
+.my-name:focus {
+  border-color: var(--grid);
+  background: #fff;
+}
+
+.you {
+  color: #77736a;
+}
+
+/* The other people's pointers: board coordinates drawn over the canvas, never in the way. */
+.cursors {
+  position: absolute;
+  inset: 0;
+  overflow: hidden;
+  pointer-events: none;
+}
+
+.cursor {
+  position: absolute;
+  top: 0;
+  left: 0;
+  /* Updates come about 20 times a second; this fills the gaps. */
+  transition: transform 60ms linear;
+  will-change: transform;
+}
+
+.cursor-arrow {
+  display: block;
+  filter: drop-shadow(0 1px 1px rgb(0 0 0 / 0.3));
+}
+
+.cursor-label {
+  position: absolute;
+  top: 16px;
+  left: 12px;
+  padding: 0.05rem 0.45rem;
+  border-radius: 0.7rem;
+  background: var(--peer);
+  color: #fff;
+  font-size: 0.75rem;
+  white-space: nowrap;
+}
+
+.note.edited {
+  outline: 2px solid var(--editor);
+  outline-offset: 1px;
+}
+
+.note-editors {
+  position: absolute;
+  bottom: 100%;
+  left: 0;
+  display: flex;
+  gap: 0.25rem;
+  margin-bottom: 0.15rem;
+  pointer-events: none;
+}
+
+.editor {
+  padding: 0.05rem 0.45rem;
+  border-radius: 0.7rem;
+  background: var(--peer);
+  color: #fff;
+  font-size: 0.7rem;
+  white-space: nowrap;
+}
+
 .pwa-banner {
   position: fixed;
   right: 1rem;

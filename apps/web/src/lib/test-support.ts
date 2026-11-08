@@ -1,7 +1,12 @@
-import { Board, generateReplicaId } from '@driftboard/crdt';
-import { stampOps, type StampedOp } from '@driftboard/protocol';
+import { Board, generateReplicaId, replicaId } from '@driftboard/crdt';
+import { stampOps, type PresenceState, type StampedOp } from '@driftboard/protocol';
 import type { TextControl } from './caret';
+import { IdentityStore } from './identity';
+import { createPresence, type PresenceConnection } from './presence';
+import { PresenceStore } from './presence-store';
 import type { TextEdit } from './text-binding';
+import type { ConnectionStatus } from './sync-connection';
+import { FakeTimers } from './test-network';
 
 type Direction = 'forward' | 'backward' | 'none';
 
@@ -85,6 +90,64 @@ export function replica(seed: number): Board {
       },
     },
   });
+}
+
+/**
+ * Presence for one person on a connection the test controls: `set('online')` brings it up, and
+ * what it sends is in `sent`. The person's own replica is `self`; others are fed to `store`.
+ */
+export function testPresence(name = 'Me') {
+  const self = replicaId('self');
+  const timers = new FakeTimers();
+  const identity = new IdentityStore(null, () => Uint8Array.from([0, 0, 0]));
+  identity.rename(name);
+  const store = new PresenceStore({ self, now: () => timers.now, timers });
+  let status: ConnectionStatus = 'offline';
+  const listeners = new Set<() => void>();
+  const sent: (PresenceState | null)[] = [];
+  const connection: PresenceConnection = {
+    getStatus: () => status,
+    subscribe: (listener) => {
+      listeners.add(listener);
+      return () => {
+        listeners.delete(listener);
+      };
+    },
+    sendPresence: (state) => {
+      if (status !== 'online') return false;
+      sent.push(state);
+      return true;
+    },
+  };
+  const presence = createPresence({
+    store,
+    identity,
+    connection,
+    now: () => timers.now,
+    timers,
+  });
+  return {
+    presence,
+    store,
+    identity,
+    timers,
+    sent,
+    set: (next: ConnectionStatus) => {
+      status = next;
+      for (const listener of [...listeners]) listener();
+    },
+    /** Someone else's presence, as the server would relay it. */
+    hear: (other: string, state: Partial<PresenceState> | null) => {
+      store.receive({
+        type: 'presence',
+        replicaId: replicaId(other),
+        state:
+          state === null
+            ? null
+            : { cursor: null, editing: null, name: other, color: '#e03131', ...state },
+      });
+    },
+  };
 }
 
 /** Operations of a replica that made a note and typed `texts` into it, stamped 1, 2, 3, ... */

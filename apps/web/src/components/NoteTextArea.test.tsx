@@ -2,7 +2,7 @@
 import { afterEach, describe, expect, it } from 'vitest';
 import { applyEdit } from '../lib/test-support';
 import type { TextEdit } from '../lib/text-binding';
-import { cleanup, composition, must, render, typeInto } from '../test-render';
+import { cleanup, composition, flush, must, render, typeInto } from '../test-render';
 import { NoteTextArea } from './NoteTextArea';
 
 afterEach(cleanup);
@@ -41,6 +41,39 @@ describe('NoteTextArea', () => {
     const note = mount('hello');
     expect(note.textarea.value).toBe('hello');
     expect(note.textarea.getAttribute('aria-label')).toBe('Note text');
+  });
+
+  describe('reporting the focus', () => {
+    it('says when it gets the focus and when it loses it', () => {
+      const changes: boolean[] = [];
+      const screen = render(
+        <NoteTextArea
+          value="hello"
+          onEdit={() => undefined}
+          onFocusChange={(focused) => {
+            changes.push(focused);
+          }}
+        />,
+      );
+      const textarea = must(screen.container.querySelector('textarea'));
+      flush(() => {
+        textarea.focus();
+      });
+      flush(() => {
+        textarea.blur();
+      });
+      expect(changes).toEqual([true, false]);
+    });
+
+    it('needs no one to listen', () => {
+      const screen = render(<NoteTextArea value="hello" onEdit={() => undefined} />);
+      const textarea = must(screen.container.querySelector('textarea'));
+      flush(() => {
+        textarea.focus();
+        textarea.blur();
+      });
+      expect(textarea.value).toBe('hello');
+    });
   });
 
   describe('diffing what the user changes', () => {

@@ -22,7 +22,7 @@ import {
 } from './room';
 import { emptyStore, storeMissing, storeVector, type OpStore } from './store';
 import { authorOps, flush, isSynced, openInitiator, receive, type Session } from './sync';
-import { must } from './test-support';
+import { must, presenceState } from './test-support';
 
 /**
  * A simulated network of three clients and one server. Messages travel as JSON text through the
@@ -194,7 +194,7 @@ class Network {
     this.#sendUp(link, {
       type: 'presence',
       replicaId: client.id,
-      state: { cursor: { x, y }, selection: [] },
+      state: presenceState({ cursor: { x, y } }),
     });
   }
 
@@ -347,6 +347,11 @@ function expectSettled(network: Network): void {
     expect(client.board.pendingCount).toBe(0);
     expect(snapshot(client.board)).toBe(snapshot(reference));
   }
+
+  // Presence is only remembered for replicas that are still here, however messages were lost,
+  // repeated or reordered and however often replicas came back.
+  const here = new Set([...room.sessions.values()].map((session) => session.peer));
+  for (const replica of room.presence.keys()) expect(here.has(replica)).toBe(true);
 
   // Once synced nothing more is sent: flushing any session yields no message.
   for (const session of room.sessions.values()) {

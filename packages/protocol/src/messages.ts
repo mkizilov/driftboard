@@ -8,7 +8,6 @@ import {
   MAX_NAME_LENGTH,
   MAX_NOTE_ID_LENGTH,
   MAX_OPS_PER_MESSAGE,
-  MAX_SELECTION,
   MAX_VECTOR_ENTRIES,
 } from './constants';
 
@@ -63,14 +62,19 @@ export const ackSchema = z
   .object({ type: z.literal('ack'), versionVector: versionVectorSchema })
   .strict();
 
+/** Who someone is and what they are doing on the board right now. It is never stored. */
 export const presenceStateSchema = z
   .object({
+    /** The pointer in board coordinates, or `null` when it is not over the board. */
     cursor: z
       .object({ x: z.number().finite(), y: z.number().finite() })
       .strict()
       .nullable(),
-    selection: z.array(noteIdSchema).max(MAX_SELECTION),
-    name: z.string().max(MAX_NAME_LENGTH).optional(),
+    /** The note whose text this person is editing, if any. */
+    editing: noteIdSchema.nullable(),
+    name: z.string().min(1).max(MAX_NAME_LENGTH),
+    /** `#rrggbb`, lower case. */
+    color: z.string().regex(/^#[0-9a-f]{6}$/),
   })
   .strict();
 

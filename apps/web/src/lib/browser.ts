@@ -1,5 +1,6 @@
 import { generateBoardId } from '@driftboard/protocol';
 import { syncUrl } from './config';
+import { IdentityStore } from './identity';
 import { openIdbStorage } from './idb-storage';
 import { watchNetwork } from './network';
 import { openBoardSession, type BoardSession } from './session';
@@ -30,6 +31,22 @@ export async function openBrowserStorage(boardId: string): Promise<BoardStorage>
   }
 }
 
+let identity: IdentityStore | undefined;
+
+/** The name and colour this person has on every board, kept in `localStorage`. */
+export function browserIdentity(): IdentityStore {
+  if (identity === undefined) {
+    let storage: Storage | null = null;
+    try {
+      storage = window.localStorage;
+    } catch {
+      // Some browsers refuse access to local storage altogether.
+    }
+    identity = new IdentityStore(storage, browserRandomBytes);
+  }
+  return identity;
+}
+
 /** Opens a board against the sync server this page is configured for. */
 export async function createBrowserSession(boardId: string): Promise<BoardSession> {
   const env = import.meta.env as { VITE_SYNC_URL?: string };
@@ -40,6 +57,7 @@ export async function createBrowserSession(boardId: string): Promise<BoardSessio
       boardId,
       url: syncUrl(env, window.location),
       storage,
+      identity: browserIdentity(),
       randomBytes: browserRandomBytes,
     });
   } catch (error) {

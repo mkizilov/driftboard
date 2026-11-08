@@ -244,15 +244,72 @@ describe('syncing through the hub', () => {
     expect(pb.presence).toEqual([{ type: 'presence', replicaId: a, state: null }]);
   });
 
+  const state = { cursor: { x: 1, y: 2 }, editing: 'n', name: 'Ada', color: '#1971c2' };
+
   it('relays presence without storing it', () => {
     const hub = newHub();
     const [pa, pb] = [connected(hub, a), connected(hub, b)];
     settle(pa, pb);
-    const state = { cursor: { x: 1, y: 2 }, selection: ['n'] };
     pa.say({ type: 'presence', replicaId: a, state });
     settle(pa, pb);
     expect(pb.presence).toEqual([{ type: 'presence', replicaId: a, state }]);
     expect(count('ops')).toBe(0);
+    expect(count('snapshots')).toBe(0);
+  });
+
+  it('tells a client that joins later who is on the board, and writes nothing for it', () => {
+    const hub = newHub();
+    const pa = connected(hub, a);
+    settle(pa);
+    pa.say({ type: 'presence', replicaId: a, state });
+    settle(pa);
+    const rows = [count('ops'), count('snapshots')];
+
+    const late = connected(hub, b);
+    settle(pa, late);
+    expect(late.presence).toEqual([{ type: 'presence', replicaId: a, state }]);
+    expect([count('ops'), count('snapshots')]).toEqual(rows);
+  });
+
+  it('does not remember presence after the last client has left the board', () => {
+    const hub = newHub();
+    const pa = connected(hub, a);
+    settle(pa);
+    pa.say({ type: 'presence', replicaId: a, state });
+    settle(pa);
+    pa.conn.closed();
+    expect(hub.roomCount).toBe(0);
+
+    const later = connected(hub, b);
+    settle(later);
+    expect(later.presence).toEqual([]);
+  });
+
+  it('announces a client that is closed for sending something invalid, and forgets its presence', () => {
+    const hub = newHub();
+    const [pa, pb] = [connected(hub, a), connected(hub, b)];
+    settle(pa, pb);
+    pa.say({ type: 'presence', replicaId: a, state });
+    settle(pa, pb);
+    pa.conn.receive('{not json', false);
+    settle(pb);
+    expect(pb.presence.at(-1)).toEqual({ type: 'presence', replicaId: a, state: null });
+
+    const late = connected(hub, c);
+    settle(late);
+    expect(late.presence).toEqual([]);
+  });
+
+  it('rejects presence that is not valid and closes only that connection', () => {
+    const hub = newHub();
+    const [pa, pb] = [connected(hub, a), connected(hub, b)];
+    settle(pa, pb);
+    const bad = { ...state, selection: [], color: 'red' };
+    pa.conn.receive(JSON.stringify({ type: 'presence', replicaId: a, state: bad }), false);
+    expect(pa.socket.closed?.code).toBe(CLOSE.policyViolation);
+    expect(pb.socket.closed).toBeNull();
+    settle(pb);
+    expect(pb.presence.every((m) => m.type === 'presence' && m.state === null)).toBe(true);
   });
 
   it('closes the older connection when a replica connects again', () => {

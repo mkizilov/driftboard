@@ -1,5 +1,6 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
+import { IdentityStore } from '../lib/identity';
 import { openBoardSession, type BoardSession } from '../lib/session';
 import { MemoryDisk } from '../lib/storage';
 import { FakeNetwork, FakeTimers } from '../lib/test-network';
@@ -8,15 +9,22 @@ import { BoardPage } from './BoardPage';
 
 afterEach(cleanup);
 
+const NAMES = ['', 'Ann', 'Bea', 'Cal'];
+
 function session(net: FakeNetwork, timers: FakeTimers, seed: number, disk = new MemoryDisk()) {
+  const randomBytes = (length: number) =>
+    Uint8Array.from({ length }, (_, index) => (seed * 53 + index * 7) % 256);
+  const identity = new IdentityStore(null, randomBytes);
+  identity.rename(NAMES[seed] ?? `Person ${seed}`);
   return openBoardSession({
     boardId: net.boardId,
     url: 'ws://test.invalid/ws',
     storage: disk.open(net.boardId),
-    randomBytes: (length) =>
-      Uint8Array.from({ length }, (_, index) => (seed * 53 + index * 7) % 256),
+    randomBytes,
+    identity,
     createSocket: net.createSocket,
     timers,
+    elapsed: () => timers.now,
     random: () => 0,
   });
 }
@@ -24,7 +32,7 @@ function session(net: FakeNetwork, timers: FakeTimers, seed: number, disk = new 
 /** The board page on one session, and a second user on the same board outside React. */
 async function open({ connect = true, disk = new MemoryDisk() } = {}) {
   const net = new FakeNetwork();
-  const timers = new FakeTimers();
+  const timers = net.timers;
   const mine = await session(net, timers, 1, disk);
   const theirs = await session(net, timers, 2);
   const createSession = () => Promise.resolve(mine);
@@ -45,12 +53,122 @@ async function open({ connect = true, disk = new MemoryDisk() } = {}) {
     });
   };
   const badge = () => must(screen.container.querySelector('.sync')).textContent;
-  return { net, timers, mine, theirs, screen, canvas, notes, doubleClick, mySocket, badge };
+  /** The pointer moves over the canvas. */
+  const movePointer = (clientX: number, clientY: number) => {
+    flush(() => {
+      canvas().dispatchEvent(new MouseEvent('pointermove', { bubbles: true, clientX, clientY }));
+    });
+  };
+  const cursors = () => [...screen.container.querySelectorAll<HTMLElement>('.cursor')];
+  return {
+    net,
+    timers,
+    mine,
+    theirs,
+    screen,
+    canvas,
+    notes,
+    doubleClick,
+    mySocket,
+    badge,
+    movePointer,
+    cursors,
+  };
 }
+
+describe('BoardPage: who is here', () => {
+  it('lists this person first, then the others on the board', async () => {
+    const { screen } = await open();
+    const group = must(screen.container.querySelector('.people'));
+    expect(must(group.querySelector<HTMLInputElement>('.my-name')).value).toBe('Ann');
+    expect([...group.querySelectorAll('.others .person')].map((item) => item.textContent)).toEqual([
+      'Bea',
+    ]);
+  });
+
+  it('shows the other person’s pointer, labelled with their name', async () => {
+    const { theirs, timers, cursors } = await open();
+    timers.advance(100);
+    flush(() => {
+      theirs.presence.moveCursor({ x: 120, y: 80 });
+    });
+    const [cursor] = cursors();
+    expect(must(cursor).querySelector('.cursor-label')?.textContent).toBe('Bea');
+    expect(must(cursor).style.transform).toBe('translate(120px, 80px)');
+  });
+
+  it('sends where this person’s pointer is, in board units, and the other person sees it', async () => {
+    const { theirs, timers, movePointer } = await open();
+    timers.advance(100);
+    movePointer(300, 200);
+    const [ann] = theirs.presence.store.getPeers();
+    expect(ann).toMatchObject({ name: 'Ann', cursor: { x: 300, y: 200 } });
+  });
+
+  it('says the pointer is gone when it leaves the canvas', async () => {
+    const { theirs, timers, movePointer, canvas } = await open();
+    timers.advance(100);
+    movePointer(300, 200);
+    timers.advance(100);
+    flush(() => {
+      canvas().dispatchEvent(new MouseEvent('pointerout', { bubbles: true, relatedTarget: null }));
+    });
+    expect(theirs.presence.store.getPeers()[0]?.cursor).toBeNull();
+  });
+
+  it('shows which note someone else is editing, on that note, and no longer when they stop', async () => {
+    const { theirs, timers, notes, doubleClick } = await open();
+    doubleClick(300, 200);
+    const id = must(theirs.store.getIds()[0]);
+    timers.advance(100);
+    flush(() => {
+      theirs.presence.startEditing(id);
+    });
+    const badge = () => must(notes()[0]).querySelector('.editor')?.textContent;
+    expect(badge()).toBe('Bea is editing');
+    timers.advance(100);
+    flush(() => {
+      theirs.presence.stopEditing(id);
+    });
+    expect(badge()).toBeUndefined();
+  });
+
+  it('tells the other person which note this one is editing', async () => {
+    const { theirs, timers, notes, doubleClick } = await open();
+    doubleClick(300, 200);
+    const id = must(theirs.store.getIds()[0]);
+    timers.advance(100);
+    flush(() => {
+      must(must(notes()[0]).querySelector('textarea')).focus();
+    });
+    expect(theirs.presence.store.getEditors(id).map((editor) => editor.name)).toEqual(['Ann']);
+  });
+
+  it('drops the other person from the page when they go quiet for six seconds', async () => {
+    const { theirs, timers, screen } = await open();
+    theirs.presence.dispose();
+    flush(() => {
+      timers.advance(6000);
+    });
+    expect(screen.container.querySelectorAll('.others .person')).toHaveLength(0);
+  });
+
+  it('forgets everyone when the connection is lost', async () => {
+    const { theirs, mySocket, screen, cursors } = await open();
+    flush(() => {
+      theirs.presence.moveCursor({ x: 1, y: 1 });
+    });
+    flush(() => {
+      mySocket.drop();
+    });
+    expect(screen.container.querySelectorAll('.others .person')).toHaveLength(0);
+    expect(cursors()).toEqual([]);
+  });
+});
 
 describe('BoardPage', () => {
   it('shows the connection as online, syncing or offline, with the changes waiting', async () => {
-    const { net, timers, mySocket, mine, badge } = await open();
+    const { net, mySocket, mine, badge } = await open();
     expect(badge()).toBe('Online');
 
     flush(() => {
@@ -64,7 +182,7 @@ describe('BoardPage', () => {
     expect(badge()).toMatch(/^Offline · \d+ pending changes?$/);
 
     flush(() => {
-      timers.fire();
+      mine.connection.retryNow();
     });
     expect(badge()).toMatch(/^Syncing…/);
 

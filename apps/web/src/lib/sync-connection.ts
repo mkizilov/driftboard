@@ -9,6 +9,8 @@ import {
   receive,
   toBoardOps,
   type OpStore,
+  type Presence,
+  type PresenceState,
   type Session,
   type StampedOp,
 } from '@driftboard/protocol';
@@ -76,7 +78,7 @@ export interface Timers {
   clearTimeout(handle: unknown): void;
 }
 
-const browserTimers: Timers = {
+export const browserTimers: Timers = {
   setTimeout: (callback, ms) => globalThis.setTimeout(callback, ms),
   clearTimeout: (handle) => {
     globalThis.clearTimeout(handle as ReturnType<typeof setTimeout>);
@@ -104,6 +106,8 @@ export interface SyncConnectionOptions {
   readonly onStored?: (ops: readonly StampedOp[]) => void;
   /** Called when what the server is known to hold has changed. */
   readonly onHeld?: (held: VersionVector) => void;
+  /** Called with presence that the server relays: who is here and what they are doing. */
+  readonly onPresence?: (presence: Presence) => void;
 }
 
 /**
@@ -181,6 +185,17 @@ export class SyncConnection {
     this.#options.onStored?.(authored.ops);
     this.#flush();
     this.#update({});
+  }
+
+  /**
+   * Sends this replica's presence (`null` says it has left). Presence is ephemeral: it is sent now
+   * or not at all. Returns whether there was a connection to send it on.
+   */
+  sendPresence(state: PresenceState | null): boolean {
+    if (this.#session === null || this.#session.phase !== 'ready') return false;
+    const replicaId = this.#options.replicaId;
+    this.#send(encodeMessage({ type: 'presence', replicaId, state }));
+    return true;
   }
 
   /** The network is back (or the user asks): connect now instead of waiting out the retry delay. */
@@ -276,6 +291,7 @@ export class SyncConnection {
     this.#store = step.store;
     if (step.applied.length > 0) this.#options.onStored?.(step.applied);
     this.#trackHeld(step.session);
+    if (step.presence !== null) this.#options.onPresence?.(step.presence);
     if (step.applied.length > 0) {
       try {
         this.#options.board.applyRemote(toBoardOps(step.applied));

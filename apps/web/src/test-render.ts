@@ -63,6 +63,26 @@ export function typeInto(textarea: HTMLTextAreaElement, text: string): void {
   });
 }
 
+/**
+ * What a user does when typing `value` into a text input: set through the prototype's setter so
+ * that React's value tracking sees a change when the `input` event arrives.
+ */
+export function setInputValue(input: HTMLInputElement, value: string): void {
+  const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
+  if (setter === undefined) throw new Error('input has no value setter');
+  flush(() => {
+    setter.call(input, value);
+    input.dispatchEvent(new Event('input', { bubbles: true }));
+  });
+}
+
+/** A key pressed on `element`. */
+export function pressKey(element: HTMLElement, key: string): void {
+  flush(() => {
+    element.dispatchEvent(new KeyboardEvent('keydown', { key, bubbles: true }));
+  });
+}
+
 /** An input method composition event. */
 export function composition(textarea: HTMLTextAreaElement, type: 'start' | 'end'): void {
   flush(() => {

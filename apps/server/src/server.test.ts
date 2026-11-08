@@ -321,7 +321,7 @@ describe('several real WebSocket clients', () => {
     const [a, b] = [new TestClient(url, 'a', boardId), new TestClient(url, 'b', boardId)];
     await Promise.all([a.connect(), b.connect()]);
     await until(() => converged([a, b]));
-    const state = { cursor: { x: 5, y: 6 }, selection: [] };
+    const state = { cursor: { x: 5, y: 6 }, editing: null, name: 'Ada', color: '#1971c2' };
     must(a.socket).send(encodeMessage({ type: 'presence', replicaId: a.id, state }));
     await until(() => b.presence.length === 1);
     expect(b.presence[0]).toEqual({ type: 'presence', replicaId: a.id, state });

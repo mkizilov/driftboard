@@ -3,8 +3,9 @@ import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
 import {
   MAX_FRAME_BYTES,
+  MAX_NAME_LENGTH,
+  MAX_NOTE_ID_LENGTH,
   MAX_OPS_PER_MESSAGE,
-  MAX_SELECTION,
   PROTOCOL_VERSION,
   encodeMessage,
   parseMessage,
@@ -34,9 +35,13 @@ const messages: Message[] = [
   {
     type: 'presence',
     replicaId: a,
-    state: { cursor: { x: 1.5, y: -2 }, selection: ['1@a', '2@b'], name: 'Ada' },
+    state: { cursor: { x: 1.5, y: -2 }, editing: '1@a', name: 'Ada', color: '#1971c2' },
   },
-  { type: 'presence', replicaId: a, state: { cursor: null, selection: [] } },
+  {
+    type: 'presence',
+    replicaId: a,
+    state: { cursor: null, editing: null, name: 'Grace Hopper', color: '#c2255c' },
+  },
   { type: 'presence', replicaId: a, state: null },
   { type: 'error', code: 'out_of_order', message: 'expected operation 4 from a' },
 ];
@@ -141,12 +146,6 @@ describe('message parsing', () => {
   describe('rejects bad presence and errors', () => {
     const presence = messages[4] as Message;
     const state = (json: Record<string, unknown>) => json['state'] as Record<string, unknown>;
-    it('a selection that is too long', () => {
-      const text = altered(presence, (j) => {
-        state(j)['selection'] = Array.from({ length: MAX_SELECTION + 1 }, (_, i) => `n${i}`);
-      });
-      expect(parseMessage(text).ok).toBe(false);
-    });
     it('a cursor without coordinates, or with text coordinates', () => {
       for (const cursor of [{}, { x: 1 }, { x: '1', y: 2 }, { x: 1, y: 2, z: 3 }, 5]) {
         const text = altered(presence, (j) => {
@@ -155,11 +154,45 @@ describe('message parsing', () => {
         expect(parseMessage(text).ok).toBe(false);
       }
     });
-    it('an empty note id in the selection, or a name that is too long', () => {
-      const emptyId = altered(presence, (j) => (state(j)['selection'] = ['']));
-      expect(parseMessage(emptyId).ok).toBe(false);
-      const longName = altered(presence, (j) => (state(j)['name'] = 'n'.repeat(81)));
-      expect(parseMessage(longName).ok).toBe(false);
+    it('a cursor that is not finite', () => {
+      // JSON cannot carry Infinity or NaN, but a huge number is read back as Infinity.
+      const text = encodeMessage(presence).replace('1.5', '1e999');
+      expect(parseMessage(text).ok).toBe(false);
+    });
+    it('a note id that is empty, too long or not text', () => {
+      for (const editing of ['', 'n'.repeat(MAX_NOTE_ID_LENGTH + 1), 5, ['1@a']]) {
+        const text = altered(presence, (j) => (state(j)['editing'] = editing));
+        expect(parseMessage(text).ok).toBe(false);
+      }
+    });
+    it('a name that is missing, empty, too long or not text', () => {
+      for (const name of ['', 'n'.repeat(MAX_NAME_LENGTH + 1), 5, null]) {
+        const text = altered(presence, (j) => (state(j)['name'] = name));
+        expect(parseMessage(text).ok).toBe(false);
+      }
+      expect(parseMessage(altered(presence, (j) => delete state(j)['name'])).ok).toBe(false);
+    });
+    it('a colour that is not six lower-case hex digits after a #', () => {
+      const bad = ['', 'red', '#12345', '#1234567', '#1971C2', '1971c2', '#1971c2ff', '#19 1c2', 5];
+      for (const color of bad) {
+        const text = altered(presence, (j) => (state(j)['color'] = color));
+        expect(parseMessage(text).ok).toBe(false);
+      }
+      expect(parseMessage(altered(presence, (j) => delete state(j)['color'])).ok).toBe(false);
+    });
+    it('a missing note id, and the old selection list', () => {
+      expect(parseMessage(altered(presence, (j) => delete state(j)['editing'])).ok).toBe(false);
+      const old = altered(presence, (j) => (state(j)['selection'] = []));
+      expect(parseMessage(old).ok).toBe(false);
+    });
+    it('a state that is not an object', () => {
+      for (const value of [5, 'x', [], true]) {
+        expect(parseMessage(altered(presence, (j) => (j['state'] = value))).ok).toBe(false);
+      }
+    });
+    it('presence about no replica or a bad one', () => {
+      expect(parseMessage(altered(presence, (j) => delete j['replicaId'])).ok).toBe(false);
+      expect(parseMessage(altered(presence, (j) => (j['replicaId'] = 'x y'))).ok).toBe(false);
     });
     it('an unknown error code', () => {
       const error = messages[7] as Message;

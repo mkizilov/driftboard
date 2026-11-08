@@ -3,6 +3,7 @@ import { useBoardSession } from '../hooks/use-board';
 import { createBrowserSession } from '../lib/browser';
 import type { BoardSession } from '../lib/session';
 import { Canvas } from './Canvas';
+import { PeopleList } from './PeopleList';
 import { SyncIndicator } from './SyncIndicator';
 
 function CopyLinkButton() {
@@ -60,10 +61,11 @@ export function BoardPage({ boardId, createSession = createBrowserSession }: Boa
           driftboard
         </a>
         <SyncIndicator session={session} />
+        <PeopleList presence={session.presence} />
         <span className="hint">Double-click the canvas to add a note</span>
         <CopyLinkButton />
       </header>
-      <Canvas store={session.store} />
+      <Canvas store={session.store} presence={session.presence} />
     </div>
   );
 }

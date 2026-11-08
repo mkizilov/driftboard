@@ -1,5 +1,11 @@
 import { VersionVector } from '@driftboard/crdt';
-import { PROTOCOL_VERSION, parseMessage, type StampedOp } from '@driftboard/protocol';
+import {
+  PROTOCOL_VERSION,
+  parseMessage,
+  type Presence,
+  type PresenceState,
+  type StampedOp,
+} from '@driftboard/protocol';
 import { describe, expect, it } from 'vitest';
 import { BoardStore } from './board-store';
 import { restoreStore } from './persistence';
@@ -777,5 +783,135 @@ describe('SyncConnection: the network comes and goes', () => {
     net.open(latest());
     expect(timers.delays).toEqual([]);
     expect(b.board.getNote(id)).toMatchObject({ x: 1, y: 2 });
+  });
+});
+
+describe('SyncConnection: presence', () => {
+  const here = (name: string, change: Partial<PresenceState> = {}): PresenceState => ({
+    cursor: null,
+    editing: null,
+    name,
+    color: '#1971c2',
+    ...change,
+  });
+
+  /** A client that records the presence the server relays to it. */
+  function listener(
+    harness: ReturnType<typeof setup>,
+    seed: number,
+  ): ReturnType<ReturnType<typeof setup>['client']> & { heard: Presence[] } {
+    const heard: Presence[] = [];
+    const connected = harness.client(seed, {
+      onPresence: (presence) => {
+        heard.push(presence);
+      },
+    });
+    return { ...connected, heard };
+  }
+
+  it('cannot be sent before the connection is online, and says so', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    expect(a.connection.sendPresence(here('A'))).toBe(false);
+    a.connection.start();
+    expect(a.connection.sendPresence(here('A'))).toBe(false);
+    expect(harness.net.room.presence.size).toBe(0);
+  });
+
+  it('is sent as a message about this replica once it is', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    const socket = harness.online(a);
+    const state = here('A', { cursor: { x: 3, y: 4 }, editing: '1@a' });
+    expect(a.connection.sendPresence(state)).toBe(true);
+    const sent = parseMessage(must(socket.sent.at(-1)));
+    expect(sent.ok ? sent.message : undefined).toEqual({
+      type: 'presence',
+      replicaId: a.board.replicaId,
+      state,
+    });
+    expect(harness.net.room.presence.get(a.board.replicaId)).toEqual(state);
+  });
+
+  it('reaches the others, and not the one that sent it', () => {
+    const harness = setup();
+    const a = listener(harness, 1);
+    const b = listener(harness, 2);
+    harness.online(a);
+    harness.online(b);
+    a.connection.sendPresence(here('A'));
+    expect(b.heard).toEqual([
+      { type: 'presence', replicaId: a.board.replicaId, state: here('A') },
+    ]);
+    expect(a.heard).toEqual([]);
+  });
+
+  it('tells a client that connects later who is already here', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    harness.online(a);
+    a.connection.sendPresence(here('A', { cursor: { x: 1, y: 2 } }));
+
+    const late = listener(harness, 2);
+    harness.online(late);
+    expect(late.heard).toEqual([
+      {
+        type: 'presence',
+        replicaId: a.board.replicaId,
+        state: here('A', { cursor: { x: 1, y: 2 } }),
+      },
+    ]);
+  });
+
+  it('tells the others when the connection is lost, and cannot be sent after it', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    const b = listener(harness, 2);
+    const socket = harness.online(a);
+    harness.online(b);
+    a.connection.sendPresence(here('A'));
+    socket.drop();
+    expect(b.heard.at(-1)).toEqual({
+      type: 'presence',
+      replicaId: a.board.replicaId,
+      state: null,
+    });
+    expect(a.connection.sendPresence(here('A'))).toBe(false);
+    expect(harness.net.room.presence.size).toBe(0);
+  });
+
+  it('cannot be sent once the connection is disposed', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    harness.online(a);
+    a.connection.dispose();
+    expect(a.connection.sendPresence(here('A'))).toBe(false);
+  });
+
+  it('is not an operation: it is not stored, not counted and not kept by the room', () => {
+    const harness = setup();
+    const recording = recorder();
+    const a = harness.client(1, recording.options);
+    const b = harness.client(2);
+    harness.online(a);
+    harness.online(b);
+    const vector = harness.net.room.store;
+    for (let step = 0; step < 20; step += 1) {
+      a.connection.sendPresence(here('A', { cursor: { x: step, y: step } }));
+      b.connection.sendPresence(here('B'));
+    }
+    expect(recording.stored).toEqual([]);
+    expect(a.connection.getState().pending).toBe(0);
+    expect(harness.net.room.store).toBe(vector);
+  });
+
+  it('is ignored when a client was not given anywhere to put it', () => {
+    const harness = setup();
+    const a = harness.client(1);
+    const b = harness.client(2);
+    harness.online(a);
+    harness.online(b);
+    expect(() => b.connection.sendPresence(here('B'))).not.toThrow();
+    expect(a.connection.getStatus()).toBe('online');
   });
 });

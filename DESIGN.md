@@ -340,10 +340,10 @@ different origins may arrive in any order because `Board.applyRemote` tolerates 
 
 | Message | Fields | Purpose |
 | --- | --- | --- |
-| `hello` | `version`, `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
+| `hello` | `version` (2), `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
 | `ops` | `ops: [{ origin, seq, op }]`, 1 to 500 | A batch of operations the receiver is missing. |
 | `ack` | `versionVector` | "I hold everything this covers." Sent after receiving operations that were new. |
-| `presence` | `replicaId`, `state: { cursor, selection, name? } \| null` | Ephemeral cursor and selection, relayed, never stored. `null` means the replica left. |
+| `presence` | `replicaId`, `state: { cursor, editing, name, color } \| null` | Ephemeral: where the pointer is (board coordinates, or `null`), which note is being edited (or `null`), and the person's name (1 to 80 characters) and colour (`#rrggbb`). Relayed, never stored. `null` means the replica left. |
 | `error` | `code`, `message` | A protocol violation; the sender then closes the connection. |
 
 Error codes: `invalid_message`, `unsupported_version`, `wrong_board`, `unexpected_message`
@@ -384,8 +384,19 @@ session.
 board JSON), stores it in canonical form, and rejects the whole batch, leaving the store unchanged,
 for a bad payload, a gap or a conflict. A client may only send presence for itself.
 
-**Presence.** Relayed to the other ready sessions, not stored. When a client's connection ends the
-server relays `state: null` for it.
+**Presence.** Relayed to the other ready sessions, never stored with the operations or written to
+the database. A client sends its *whole* state each time, so a message never depends on an earlier
+one and a lost or repeated one does no harm. The room keeps, in memory only, the latest state of
+every replica that is on the board, for one purpose: when a client says `hello`, the server follows
+its replies with one `presence` message for each replica already here, so a newcomer sees everyone
+at once and not as they happen to move. That memory goes when the replica leaves, when its
+connection is closed for breaking the protocol (the others are told, as for any departure) and when
+the last client leaves the board and the room is dropped. When a client's connection ends the server
+relays `state: null` for it. A client that is *silent but not gone* (a frozen tab on a connection
+the server has not noticed is dead) is not the server's business: clients drop whoever they have
+not heard from, see "Presence" under the web client. Protocol version 2 changed the state (it had a
+list of selected notes and an optional name); a version 1 client is refused with
+`unsupported_version`.
 
 **Tested** (`packages/protocol/src/*.test.ts`): schemas and malformed input; the store (gaps,
 conflicts, duplicates, versions that share storage) against a plain model; the handshake, live
@@ -564,13 +575,60 @@ browser's back, and `NoteTextArea` is a thin shell over `createTextBinding` (`li
 test advances by hand) and `Device` (`lib/test-device.ts`: one person's browser with a disk that
 survives page loads and a network that can be switched off), including property tests over random
 sessions of typing, remote edits and compositions, and over random edits, disconnects and reloads on
-three devices. The components (`NoteTextArea`, `NoteCard`, `BoardPage`, `SyncIndicator`,
-`PwaBanner`, `HomePage`, `App`) are tested with React and jsdom through `test-render.ts`.
+three devices. Time is virtual: `FakeTimers` has a clock that `advance(ms)` moves, running what
+falls due in order, so throttling and timeouts are tested to the millisecond (`presence-sender`,
+`presence-store`) and across devices on a shared clock (`presence-sessions`, which also checks that
+presence is not written to any disk and that, after random moves, edits, renames, disconnects and
+reloads on three devices, everyone sees exactly the others who are online as they last said). The
+components (`NoteTextArea`, `NoteCard`, `BoardPage`, `SyncIndicator`, `PwaBanner`, `Cursors`,
+`PeopleList`, `HomePage`, `App`) are tested with React and jsdom through `test-render.ts`.
 
-**Not yet:** presence (cursors, selections) is in the protocol but not shown. There is no undo, no
-keyboard shortcuts for notes and no touch-specific design beyond pointer events. Concurrent edits of
-the same word by two people merge as the sequence CRDT dictates, which can read oddly, and the caret
-is not shown to the other person.
+### Presence **[implemented]**
+
+Who is looking at the board, where their pointers are and which note each is editing. It is
+ephemeral: it travels over the same WebSocket as the operations, is never written to IndexedDB or
+to SQLite, never counts as a pending change, and is gone when the page or the connection is.
+
+- **Who you are.** A name ("Brave Otter") and one of eight colours, picked at random the first time
+  and kept in `localStorage` (`lib/identity.ts`), so it is the same on every board and every page
+  load; if storage is blocked it lasts as long as the page. The name can be edited in the bar
+  (Enter or leaving the field saves, Escape cancels, an empty name is refused). A stored identity
+  that does not validate is replaced.
+- **What is sent** (`lib/presence-sender.ts`, `lib/presence.ts`): the whole state `{ cursor, editing,
+  name, color }`. The cursor is the pointer in *board* coordinates (so it is right whatever either
+  person's pan and zoom is), rounded to whole units, and `null` when the pointer leaves the canvas.
+  Panning under a still pointer also counts, since the pointer is then over another part of the
+  board. `editing` is the note whose textarea has the focus; it is cleared on blur and when the note
+  is deleted or the page closes. Nothing is sent unless the connection is *online*.
+- **Throttled to 20 a second.** At least 50 ms pass between two messages. A change that finds the
+  line free goes out at once; changes that come sooner are merged and the latest state goes out
+  when the interval is over, so the end of a movement is never lost. There is one timer, always set
+  for the next moment something is due.
+- **Heartbeat.** With nothing new to say the state is sent again every 2 s, so that someone who is
+  perfectly still can be told from someone who is gone. On a new connection the state goes out at
+  once, because the server and the others know nothing of the new connection.
+- **Timeout** (`lib/presence-store.ts`). Everyone else is dropped after 6 s without a message (three
+  heartbeats, so one lost message does not make a person flicker away), when they say they have
+  left, and all at once when the connection is lost, because nothing can be known about them then;
+  when it returns the server's snapshot tells who is here. One timer is pending while anyone is
+  here, set for the moment the oldest entry could expire; a message that refreshes an entry only
+  notes the time. All timing uses a monotonic clock (`performance.now`), not the wall clock, which
+  can be set back.
+- **What is shown.** The bar lists this person first ("you", name editable) and then the others by
+  name, with "editing a note" next to anyone who is. Each other person's pointer is drawn over the
+  canvas with an arrow in their colour and a name label (it keeps its size at any zoom and glides
+  over the 50 ms steps with a short CSS transition), and a note being edited gets an outline in the
+  editor's colour and a "Name is editing" badge. Names are only ever put into the page as text.
+- **Only what changed renders.** `PresenceStore` hands out stable snapshots like `BoardStore`: the
+  list of people, and per note a list of its editors that changes only when *that note's* editors
+  do. A moving cursor renders the pointers and the list, never a note.
+
+**Not yet:** presence shows the focused note, not the caret or selection inside it. The server
+cannot tell a frozen tab on an open connection from a quiet one, which is why timing out is the
+clients' job. Cursors do not follow a person who scrolls the page rather than the canvas. There is
+no undo, no keyboard shortcuts for notes and no touch-specific design beyond pointer events.
+Concurrent edits of the same word by two people merge as the sequence CRDT dictates, which can read
+oddly.
 
 ## Offline-first approach **[implemented]**
 

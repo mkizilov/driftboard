@@ -6,6 +6,8 @@ export interface NoteTextAreaProps {
   value: string;
   /** Called with what the user changed: the text between the common prefix and suffix. */
   onEdit: (edit: TextEdit) => void;
+  /** The textarea gained or lost the focus: its person started or stopped editing. */
+  onFocusChange?: (focused: boolean) => void;
   label?: string;
 }
 
@@ -20,7 +22,12 @@ export interface NoteTextAreaProps {
  * behind the binding's back and put the caret at the end. The layout effect below sets the first
  * text instead, before the browser paints.
  */
-export function NoteTextArea({ value, onEdit, label = 'Note text' }: NoteTextAreaProps) {
+export function NoteTextArea({
+  value,
+  onEdit,
+  onFocusChange,
+  label = 'Note text',
+}: NoteTextAreaProps) {
   const ref = useRef<HTMLTextAreaElement>(null);
   const onEditRef = useRef(onEdit);
   const [binding] = useState(() =>
@@ -44,6 +51,12 @@ export function NoteTextArea({ value, onEdit, label = 'Note text' }: NoteTextAre
       ref={ref}
       className="note-text"
       aria-label={label}
+      onFocus={() => {
+        onFocusChange?.(true);
+      }}
+      onBlur={() => {
+        onFocusChange?.(false);
+      }}
       onChange={(event) => {
         binding.input(event.currentTarget);
       }}

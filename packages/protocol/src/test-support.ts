@@ -1,4 +1,5 @@
 import { Board, createManualClock, type BoardOp, type ReplicaId } from '@driftboard/crdt';
+import type { PresenceState } from './messages';
 import { stampOps, type StampedOp } from './ops';
 import { storeAdd, emptyStore, type OpStore } from './store';
 
@@ -22,6 +23,11 @@ export function storeOf(...batches: StampedOp[][]): OpStore {
     store = result.store;
   }
   return store;
+}
+
+/** A valid presence state, with whatever a test wants to be different. */
+export function presenceState(change: Partial<PresenceState> = {}): PresenceState {
+  return { cursor: null, editing: null, name: 'Ada', color: '#1971c2', ...change };
 }
 
 /** Unwraps a value a test knows exists (noUncheckedIndexedAccess helper). */

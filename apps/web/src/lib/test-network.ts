@@ -70,6 +70,8 @@ export class FakeSocket implements SocketLike {
  */
 export class FakeNetwork {
   room: Room;
+  /** A clock for everything on this network, for tests where devices must share time. */
+  readonly timers = new FakeTimers();
   readonly sockets: FakeSocket[] = [];
   /** Whether sockets made from now on linger when closed; see `FakeSocket.lingers`. */
   lingerOnClose = false;
@@ -162,15 +164,23 @@ export class FakeNetwork {
   }
 }
 
-/** Timers that only run when the test says so. */
+/**
+ * Timers on a clock that only moves when the test says so: `advance` runs everything that falls
+ * due, in order, and `fire` jumps to the next timer and runs it. `now` is the clock, in ms from 0.
+ */
 export class FakeTimers implements Timers {
-  readonly #waiting = new Map<number, { callback: () => void; ms: number }>();
+  readonly #waiting = new Map<number, { callback: () => void; ms: number; due: number }>();
   #next = 1;
+  #now = 0;
+
+  get now(): number {
+    return this.#now;
+  }
 
   setTimeout(callback: () => void, ms: number): unknown {
     const id = this.#next;
     this.#next += 1;
-    this.#waiting.set(id, { callback, ms });
+    this.#waiting.set(id, { callback, ms, due: this.#now + ms });
     return id;
   }
 
@@ -178,17 +188,40 @@ export class FakeTimers implements Timers {
     this.#waiting.delete(handle as number);
   }
 
-  /** The delays of the timers that are waiting, oldest first. */
+  /** The delays the waiting timers were set with, in the order they were set. */
   get delays(): number[] {
     return [...this.#waiting.values()].map((timer) => timer.ms);
   }
 
-  /** Runs the oldest waiting timer. */
+  /** Runs the timer that is due first, moving the clock to its time if that is still ahead. */
   fire(): void {
-    const first = this.#waiting.entries().next();
-    if (first.done === true) throw new Error('no timer is waiting');
-    const [id, timer] = first.value;
+    const next = this.#nextDue();
+    if (next === undefined) throw new Error('no timer is waiting');
+    this.#run(next[0], next[1]);
+  }
+
+  /** Moves the clock forward by `ms`, running each timer that falls due on the way, in order. */
+  advance(ms: number): void {
+    const target = this.#now + ms;
+    for (;;) {
+      const next = this.#nextDue();
+      if (next === undefined || next[1].due > target) break;
+      this.#run(next[0], next[1]);
+    }
+    this.#now = target;
+  }
+
+  #nextDue(): [number, { callback: () => void; due: number }] | undefined {
+    let best: [number, { callback: () => void; due: number }] | undefined;
+    for (const entry of this.#waiting) {
+      if (best === undefined || entry[1].due < best[1].due) best = entry;
+    }
+    return best;
+  }
+
+  #run(id: number, timer: { callback: () => void; due: number }): void {
     this.#waiting.delete(id);
+    this.#now = Math.max(this.#now, timer.due);
     timer.callback();
   }
 }

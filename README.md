@@ -30,5 +30,11 @@ Open the web client and choose *Create a board*. The link is the only key to the
 another tab or browser to edit together. Double-click the background to add a note, drag a note by
 its header, scroll to pan and Ctrl/Cmd + scroll (or pinch) to zoom.
 
+People on the same board see each other: the bar lists who is here, each person's pointer is drawn
+with their name and colour, and a note that someone is typing in is outlined with their name on it.
+You get a random name and colour, kept in this browser; click your name in the bar to change it.
+This is *presence*: it is never stored, is sent at most 20 times a second, and someone who has said
+nothing for 6 seconds drops off the list.
+
 Requires Node 22 (`.nvmrc`). Everything stays inside this folder: dependencies in `node_modules`,
 the pnpm store in `.pnpm-store`, SQLite databases in `.data/`.

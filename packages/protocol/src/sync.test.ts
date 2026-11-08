@@ -16,7 +16,7 @@ import {
   type Session,
   type SessionStep,
 } from './sync';
-import { must, stamped, storeOf } from './test-support';
+import { must, presenceState, stamped, storeOf } from './test-support';
 
 const a = replicaId('a');
 const b = replicaId('b');
@@ -262,6 +262,9 @@ describe('protocol violations close the session with an error', () => {
     expectClosed(receive(responder(), emptyStore, other), 'wrong_board');
     const future = hello(a, emptyStore, { version: PROTOCOL_VERSION + 1 });
     expectClosed(receive(responder(), emptyStore, future), 'unsupported_version');
+    // Version 1 clients sent a different presence state (a list of selected notes).
+    const old = hello(a, emptyStore, { version: 1 });
+    expectClosed(receive(responder(), emptyStore, old), 'unsupported_version');
     expectClosed(receive(responder(), emptyStore, hello(serverId, emptyStore)), 'invalid_message');
   });
 
@@ -318,7 +321,7 @@ describe('presence', () => {
     const mine: Message = {
       type: 'presence',
       replicaId: c,
-      state: { cursor: { x: 1, y: 2 }, selection: [] },
+      state: presenceState({ cursor: { x: 1, y: 2 } }),
     };
     expect(receive(pair.server.session, emptyStore, mine).presence).toEqual(mine);
 

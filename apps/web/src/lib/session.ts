@@ -1,18 +1,22 @@
 import { Board, VersionVector, generateReplicaId, type ReplicaId } from '@driftboard/crdt';
 import { storeMissing, toBoardOps } from '@driftboard/protocol';
 import { BoardStore } from './board-store';
+import { IdentityStore } from './identity';
 import { Persistence, restoreStore } from './persistence';
+import { createPresence, type LivePresence } from './presence';
+import { PresenceStore } from './presence-store';
 import type { BoardStorage } from './storage';
 import {
   SyncConnection,
+  browserTimers,
   type SocketFactory,
   type SyncConnectionOptions,
   type Timers,
 } from './sync-connection';
 
 /**
- * A board open in this browser tab: its document, the store React reads, the connection and what
- * is kept on this device.
+ * A board open in this browser tab: its document, the store React reads, the connection, what is
+ * kept on this device and who else is here.
  */
 export interface BoardSession {
   readonly boardId: string;
@@ -20,6 +24,8 @@ export interface BoardSession {
   readonly store: BoardStore;
   readonly connection: SyncConnection;
   readonly persistence: Persistence;
+  /** Who else is here, and what this person shows them. Never stored. */
+  readonly presence: LivePresence;
   /** Stored operations that could not be used because an earlier one of their origin is missing. */
   readonly droppedOps: number;
   start(): void;
@@ -36,6 +42,13 @@ export interface SessionOptions {
   readonly randomBytes: (length: number) => Uint8Array;
   /** Whole milliseconds since the epoch. Defaults to `Date.now`. */
   readonly now?: () => number;
+  /**
+   * Milliseconds from any start that never goes backwards, for timing presence. Defaults to
+   * `performance.now`; the wall clock is no good because it can be set back.
+   */
+  readonly elapsed?: () => number;
+  /** Who this person is on every board. Defaults to a new one that lasts as long as the page. */
+  readonly identity?: IdentityStore;
   readonly createSocket?: SocketFactory;
   readonly timers?: Timers;
   readonly random?: () => number;
@@ -62,6 +75,9 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
   board.applyRemote(toBoardOps(storeMissing(restored, VersionVector.empty)));
 
   const persistence = new Persistence(options.storage);
+  const timers = options.timers ?? browserTimers;
+  const elapsed = options.elapsed ?? (() => performance.now());
+  const presenceStore = new PresenceStore({ self: replicaId, now: elapsed, timers });
   const connection = new SyncConnection({
     boardId: options.boardId,
     replicaId,
@@ -74,13 +90,21 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
     onHeld: (held) => {
       persistence.setHeld(held);
     },
+    onPresence: presenceStore.receive,
+    timers,
     ...(options.createSocket === undefined ? {} : { createSocket: options.createSocket }),
-    ...(options.timers === undefined ? {} : { timers: options.timers }),
     ...(options.random === undefined ? {} : { random: options.random }),
     ...(options.retry === undefined ? {} : { retry: options.retry }),
   });
   const store = new BoardStore(board, (ops) => {
     connection.submit(ops);
+  });
+  const presence = createPresence({
+    store: presenceStore,
+    identity: options.identity ?? new IdentityStore(null, options.randomBytes),
+    connection,
+    now: elapsed,
+    timers,
   });
   let closing: Promise<void> | null = null;
   return {
@@ -89,11 +113,13 @@ export async function openBoardSession(options: SessionOptions): Promise<BoardSe
     store,
     connection,
     persistence,
+    presence,
     droppedOps: dropped,
     start: () => {
       connection.start();
     },
     dispose: () => {
+      presence.dispose();
       connection.dispose();
       closing ??= persistence.close();
       return closing;

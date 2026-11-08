@@ -1,4 +1,8 @@
-export const PROTOCOL_VERSION = 1;
+/**
+ * The version both sides must speak. 2: presence carries the person's name, colour and the note
+ * they are editing (it used to carry a list of selected notes).
+ */
+export const PROTOCOL_VERSION = 2;
 
 /** Largest number of operations in one `ops` message; larger batches are split. */
 export const MAX_OPS_PER_MESSAGE = 500;
@@ -9,9 +13,6 @@ export const MAX_VECTOR_ENTRIES = 1000;
 export const MAX_BOARD_ID_LENGTH = 200;
 export const MAX_NOTE_ID_LENGTH = 200;
 export const MAX_NAME_LENGTH = 80;
-
-/** Largest number of selected notes in a presence message. */
-export const MAX_SELECTION = 100;
 
 export const MAX_ERROR_MESSAGE_LENGTH = 500;
 

@@ -1,23 +1,9 @@
 import { useState } from 'react';
-import { useBoardSession, useConnectionStatus } from '../hooks/use-board';
+import { useBoardSession } from '../hooks/use-board';
 import { createBrowserSession } from '../lib/browser';
 import type { BoardSession } from '../lib/session';
 import { Canvas } from './Canvas';
-
-const STATUS_TEXT = {
-  connecting: 'Connecting…',
-  online: 'Connected',
-  offline: 'Offline, retrying…',
-} as const;
-
-function ConnectionBadge({ session }: { session: BoardSession }) {
-  const status = useConnectionStatus(session.connection);
-  return (
-    <span className="connection" data-status={status} role="status">
-      {STATUS_TEXT[status]}
-    </span>
-  );
-}
+import { SyncIndicator } from './SyncIndicator';
 
 function CopyLinkButton() {
   const [copied, setCopied] = useState(false);
@@ -49,13 +35,23 @@ function CopyLinkButton() {
 
 export interface BoardPageProps {
   boardId: string;
-  /** Opens the board; replaced in tests. */
-  createSession?: (boardId: string) => BoardSession;
+  /** Opens the board; replaced in tests. Must be a stable function. */
+  createSession?: (boardId: string) => Promise<BoardSession>;
 }
 
-/** A board: the canvas of notes plus the connection status and a link to share it. */
+/**
+ * A board: the canvas of notes, whether it is online, syncing or offline, and a link to share it.
+ * The board is read from this device first, so it opens with no network.
+ */
 export function BoardPage({ boardId, createSession = createBrowserSession }: BoardPageProps) {
-  const session = useBoardSession(boardId, createSession);
+  const { session, error } = useBoardSession(boardId, createSession);
+  if (error !== null) {
+    return (
+      <p className="loading" role="alert">
+        Could not open this board: {error.message}
+      </p>
+    );
+  }
   if (session === null) return <p className="loading">Opening board…</p>;
   return (
     <div className="board-page">
@@ -63,7 +59,7 @@ export function BoardPage({ boardId, createSession = createBrowserSession }: Boa
         <a className="home-link" href="/">
           driftboard
         </a>
-        <ConnectionBadge session={session} />
+        <SyncIndicator session={session} />
         <span className="hint">Double-click the canvas to add a note</span>
         <CopyLinkButton />
       </header>

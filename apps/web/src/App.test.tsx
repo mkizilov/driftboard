@@ -1,9 +1,13 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
 import { App } from './App';
+import { pwaStatus } from './lib/pwa-status';
 import { cleanup, flush, render } from './test-render';
 
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  pwaStatus.dismiss();
+});
 
 function renderAt(path: string) {
   window.history.pushState(null, '', path);
@@ -25,6 +29,15 @@ describe('App', () => {
     const screen = renderAt('/b/short');
     expect(screen.container.querySelector('h1')?.textContent).toBe('Not found');
     expect(screen.container.querySelector('[data-testid="canvas"]')).toBeNull();
+  });
+
+  it('offers an update on every page when the service worker has one', () => {
+    const screen = renderAt('/');
+    expect(screen.container.querySelector('.pwa-banner')).toBeNull();
+    flush(() => {
+      pwaStatus.markNeedRefresh();
+    });
+    expect(screen.container.querySelector('.pwa-banner')?.textContent).toContain('new version');
   });
 
   it('follows the address when it changes', () => {

@@ -1,4 +1,5 @@
 import { Board, generateReplicaId } from '@driftboard/crdt';
+import { stampOps, type StampedOp } from '@driftboard/protocol';
 import type { TextControl } from './caret';
 import type { TextEdit } from './text-binding';
 
@@ -84,6 +85,22 @@ export function replica(seed: number): Board {
       },
     },
   });
+}
+
+/** Operations of a replica that made a note and typed `texts` into it, stamped 1, 2, 3, ... */
+export function operations(seed: number, texts: readonly string[] = ['abc']): StampedOp[] {
+  const board = replica(seed);
+  const { id, ops } = board.createNote({ x: 1, y: 2 });
+  const all = [...ops];
+  for (const text of texts) all.push(...board.editText(id, 0, 0, text));
+  return stampOps(board.replicaId, 1, all);
+}
+
+/** `ops` sorted by origin and number, so that two lists can be compared. */
+export function order(ops: readonly StampedOp[]): StampedOp[] {
+  return [...ops].sort((a, b) =>
+    a.origin < b.origin ? -1 : a.origin > b.origin ? 1 : a.seq - b.seq,
+  );
 }
 
 /** Applies an edit in code points to a text, as `Board.editText` does. */

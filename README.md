@@ -16,6 +16,16 @@ pnpm --filter @driftboard/server dev   # sync server, ws://127.0.0.1:22100/ws
 pnpm --filter @driftboard/web dev      # web client, http://127.0.0.1:22101
 ```
 
+Boards are kept in the browser (IndexedDB), so they open with no network and changes made offline are
+sent when the connection returns; the bar shows *Online*, *Syncing…* or *Offline* with the number of
+pending changes. The app is a PWA that can be installed and used offline once it has been loaded;
+the service worker only exists in a build:
+
+```sh
+pnpm --filter @driftboard/web build
+pnpm --filter @driftboard/web preview   # http://127.0.0.1:22102
+```
+
 Open the web client and choose *Create a board*. The link is the only key to the board: open it in
 another tab or browser to edit together. Double-click the background to add a note, drag a note by
 its header, scroll to pan and Ctrl/Cmd + scroll (or pinch) to zoom.

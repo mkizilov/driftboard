@@ -88,19 +88,61 @@ button {
   font-size: 0.85rem;
 }
 
-.connection {
+.sync {
   font-size: 0.85rem;
   padding: 0.15rem 0.6rem;
   border-radius: 1rem;
   background: #eee;
+  white-space: nowrap;
 }
 
-.connection[data-status='online'] {
+.sync[data-state='online'] {
   background: #d7f2d2;
 }
 
-.connection[data-status='offline'] {
+.sync[data-state='offline'] {
   background: #ffd9d4;
+}
+
+/* Changes normally sync within a few milliseconds; do not flash the state for those. */
+.sync[data-state='syncing'] {
+  background: #fff1a8;
+  animation: appear 0.2s 0.4s backwards;
+}
+
+@keyframes appear {
+  from {
+    opacity: 0;
+  }
+}
+
+.save-warning {
+  font-size: 0.85rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 1rem;
+  background: #ffb4a8;
+  white-space: nowrap;
+}
+
+.pwa-banner {
+  position: fixed;
+  right: 1rem;
+  bottom: 1rem;
+  z-index: 1000;
+  display: flex;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.6rem 0.9rem;
+  border-radius: 0.5rem;
+  background: var(--ink);
+  color: #fff;
+  box-shadow: 0 4px 16px rgb(0 0 0 / 0.25);
+}
+
+.pwa-banner button {
+  padding: 0.25rem 0.7rem;
+  border: 0;
+  border-radius: 0.3rem;
 }
 
 .copy-link {

@@ -1,4 +1,4 @@
-import type { Board, BoardOp, ReplicaId } from '@driftboard/crdt';
+import { VersionVector, type Board, type BoardOp, type ReplicaId } from '@driftboard/crdt';
 import {
   authorOps,
   emptyStore,
@@ -10,9 +10,26 @@ import {
   toBoardOps,
   type OpStore,
   type Session,
+  type StampedOp,
 } from '@driftboard/protocol';
 
 export type ConnectionStatus = 'connecting' | 'online' | 'offline';
+
+/** What the UI needs to know about the connection. A new object whenever any of it changes. */
+export interface SyncState {
+  readonly status: ConnectionStatus;
+  /** Operations the server is not known to hold. */
+  readonly pending: number;
+  /** Connection attempts that failed since the last working one. */
+  readonly failures: number;
+}
+
+/** How many operations of `store` the vector `held` does not cover. */
+export function countPending(store: OpStore, held: VersionVector): number {
+  let pending = 0;
+  for (const [origin, log] of store.logs) pending += Math.max(0, log.length - held.get(origin));
+  return pending;
+}
 
 /** What the connection needs from a WebSocket, so that tests can stand in for it. */
 export interface SocketLike {
@@ -78,6 +95,15 @@ export interface SyncConnectionOptions {
   readonly random?: () => number;
   /** First retry delay and its cap, in ms; each retry doubles the delay. */
   readonly retry?: { readonly initialMs: number; readonly maxMs: number };
+  /**
+   * What this device already holds, read from storage before connecting: the operations, and what
+   * the server was last known to hold of them. Without it the connection starts empty.
+   */
+  readonly initial?: { readonly store: OpStore; readonly held: VersionVector };
+  /** Called with operations that just entered the store, authored here or received. */
+  readonly onStored?: (ops: readonly StampedOp[]) => void;
+  /** Called when what the server is known to hold has changed. */
+  readonly onHeld?: (held: VersionVector) => void;
 }
 
 /**
@@ -86,9 +112,11 @@ export interface SyncConnectionOptions {
  * opens with its version vector and the server answers with exactly what it lacks; local operations
  * are sent once connected, and anything made while offline goes out on the next connection.
  *
- * It reconnects forever with exponential backoff and jitter. `status` is for the UI:
- * `connecting` (trying), `online` (hello exchanged), `offline` (waiting to retry). Nothing here is
- * kept across page loads yet; operations made offline are lost if the page is closed.
+ * It reconnects forever with exponential backoff and jitter. `getState` is for the UI: `status` is
+ * `connecting` (trying), `online` (hello exchanged) or `offline` (waiting to retry), and `pending`
+ * counts the operations the server is not known to hold. The connection does not store anything
+ * itself: it starts from `initial` and reports what enters the store through `onStored` and what
+ * the server holds through `onHeld`, so the caller can keep them across page loads.
  */
 export class SyncConnection {
   readonly #options: SyncConnectionOptions;
@@ -96,7 +124,9 @@ export class SyncConnection {
   readonly #timers: Timers;
   readonly #random: () => number;
   readonly #listeners = new Set<() => void>();
-  #store: OpStore = emptyStore;
+  #store: OpStore;
+  /** What the server is known to hold, as of the last time it told us. */
+  #held: VersionVector;
   #session: Session | null = null;
   #socket: SocketLike | null = null;
   /** Identifies the current socket, so events from an old one are ignored. */
@@ -104,7 +134,7 @@ export class SyncConnection {
   #retryTimer: unknown = undefined;
   #attempt = 0;
   #disposed = false;
-  #status: ConnectionStatus = 'offline';
+  #state: SyncState;
   #lastError: string | null = null;
 
   constructor(options: SyncConnectionOptions) {
@@ -112,9 +142,18 @@ export class SyncConnection {
     this.#createSocket = options.createSocket ?? browserSocket;
     this.#timers = options.timers ?? browserTimers;
     this.#random = options.random ?? Math.random;
+    this.#store = options.initial?.store ?? emptyStore;
+    this.#held = options.initial?.held ?? VersionVector.empty;
+    this.#state = {
+      status: 'offline',
+      pending: countPending(this.#store, this.#held),
+      failures: 0,
+    };
   }
 
-  readonly getStatus = (): ConnectionStatus => this.#status;
+  readonly getState = (): SyncState => this.#state;
+
+  readonly getStatus = (): ConnectionStatus => this.#state.status;
 
   readonly subscribe = (listener: () => void): (() => void) => {
     this.#listeners.add(listener);
@@ -137,8 +176,29 @@ export class SyncConnection {
 
   /** Records operations made on this replica and sends them if connected. */
   submit(ops: BoardOp[]): void {
-    this.#store = authorOps(this.#store, this.#options.replicaId, ops).store;
+    const authored = authorOps(this.#store, this.#options.replicaId, ops);
+    this.#store = authored.store;
+    this.#options.onStored?.(authored.ops);
     this.#flush();
+    this.#update({});
+  }
+
+  /** The network is back (or the user asks): connect now instead of waiting out the retry delay. */
+  retryNow(): void {
+    if (this.#retryTimer === undefined) return;
+    this.#timers.clearTimeout(this.#retryTimer);
+    this.#connect();
+  }
+
+  /**
+   * The browser says the network is gone. A connection can look open for minutes after that, so
+   * give it up now and wait for the retry.
+   */
+  networkLost(): void {
+    const socket = this.#socket;
+    if (socket === null || this.#disposed) return;
+    this.#onClose();
+    socket.close();
   }
 
   /** Closes the connection and stops retrying. */
@@ -154,10 +214,21 @@ export class SyncConnection {
     this.#setStatus('offline');
   }
 
-  #setStatus(status: ConnectionStatus): void {
-    if (this.#status === status) return;
-    this.#status = status;
+  /** Replaces the state if anything in it changed, and tells the listeners. */
+  #update(change: Partial<Pick<SyncState, 'status'>>): void {
+    const next: SyncState = {
+      status: change.status ?? this.#state.status,
+      pending: countPending(this.#store, this.#held),
+      failures: this.#attempt,
+    };
+    const { status, pending, failures } = this.#state;
+    if (next.status === status && next.pending === pending && next.failures === failures) return;
+    this.#state = next;
     for (const listener of [...this.#listeners]) listener();
+  }
+
+  #setStatus(status: ConnectionStatus): void {
+    this.#update({ status });
   }
 
   #connect(): void {
@@ -203,6 +274,8 @@ export class SyncConnection {
     const step = receive(this.#session, this.#store, parsed.message);
     this.#session = step.session;
     this.#store = step.store;
+    if (step.applied.length > 0) this.#options.onStored?.(step.applied);
+    this.#trackHeld(step.session);
     if (step.applied.length > 0) {
       try {
         this.#options.board.applyRemote(toBoardOps(step.applied));
@@ -223,22 +296,35 @@ export class SyncConnection {
     if (step.session.phase === 'ready') {
       this.#attempt = 0;
       this.#lastError = null;
-      this.#setStatus('online');
+      this.#update({ status: 'online' });
     }
+  }
+
+  /**
+   * The server's `hello` tells what it really holds, and its acks only add to that, so a ready
+   * session's `acked` is always the truth, even when it is less than what was stored.
+   */
+  #trackHeld(session: Session): void {
+    if (session.phase !== 'ready' || session.acked.equals(this.#held)) return;
+    this.#held = session.acked;
+    this.#options.onHeld?.(session.acked);
   }
 
   #onClose(): void {
     this.#socket = null;
     this.#token = null;
     this.#session = null;
-    this.#setStatus('offline');
-    if (this.#disposed) return;
+    if (this.#disposed) {
+      this.#setStatus('offline');
+      return;
+    }
     const { initialMs, maxMs } = this.#options.retry ?? { initialMs: 500, maxMs: 15_000 };
     const delay = Math.min(maxMs, initialMs * 2 ** this.#attempt) * (0.5 + this.#random() / 2);
     this.#attempt += 1;
     this.#retryTimer = this.#timers.setTimeout(() => {
       if (!this.#disposed) this.#connect();
     }, delay);
+    this.#setStatus('offline');
   }
 
   #fail(reason: string): void {

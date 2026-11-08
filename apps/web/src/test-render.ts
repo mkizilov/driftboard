@@ -32,6 +32,13 @@ export function cleanup(): void {
   }
 }
 
+/** Waits for pending promises, such as a board being read from storage, and what they cause. */
+export async function settle(): Promise<void> {
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 0));
+  });
+}
+
 /** Runs `change` and lets React process what it caused. */
 export function flush(change: () => void): void {
   act(() => {

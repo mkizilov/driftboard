@@ -497,9 +497,10 @@ components are thin.
 
 **Pages.** `/` makes a board: a new id from `crypto.getRandomValues` (`generateBoardId` from
 `@driftboard/protocol`, the same rule the server enforces) and a client-side navigation to
-`/b/:boardId`. A board page shows the canvas, the connection status (connecting, connected, offline)
-and a *Copy link* button, since the link is the only access control (see "Server"). An id the server
-would refuse is shown as "Not found" without opening a socket.
+`/b/:boardId`. A board page shows the canvas, whether it is online, syncing or offline with the
+number of changes waiting (see "Offline-first approach"), and a *Copy link* button, since the link is
+the only access control (see "Server"). An id the server would refuse is shown as "Not found"
+without opening a socket. The board is read from this device first, so it opens with no network.
 
 **From document to React.** `BoardStore` (`lib/board-store.ts`) follows the `Board` through its
 change events and keeps one immutable `NoteView` per note, replaced only when that note's fields or
@@ -520,8 +521,9 @@ the server's `hello` has arrived. It reconnects forever with delays of 500 ms do
 scaled by a random factor between 0.5 and 1. Events from a socket that has been replaced are ignored.
 A message that is not text or not valid, or an `error` from the server, closes the connection (the
 reason is kept in `lastError`) and the usual retry follows.
-`createBoardSession` joins the replica id (new on every page load), `Board`, `BoardStore` and
-`SyncConnection`.
+`openBoardSession` (`lib/session.ts`) reads the board from storage, then joins the replica id (new
+on every page load), `Board`, `BoardStore`, `SyncConnection` and the write-behind `Persistence`.
+Storage, the pending count and the indicator are described under "Offline-first approach".
 
 **Canvas.** The camera is `{x, y, scale}` (`lib/viewport.ts`, pure): a board point is drawn at
 `world * scale + (x, y)`. Dragging the background pans, scrolling pans, a pinch or Ctrl/Cmd + scroll
@@ -557,38 +559,92 @@ browser's back, and `NoteTextArea` is a thin shell over `createTextBinding` (`li
   set in a layout effect instead.
 
 **Tests.** The logic above is tested without React or a browser through `FakeTextarea`
-(`lib/test-support.ts`, which models the rule that setting `value` moves the caret to the end) and
+(`lib/test-support.ts`, which models the rule that setting `value` moves the caret to the end),
 `FakeNetwork` (`lib/test-network.ts`, the protocol's real `Room` behind fake sockets, with timers the
-test advances by hand), including property tests over random sessions of typing, remote edits and
-compositions. The components (`NoteTextArea`, `NoteCard`, `BoardPage`, `HomePage`, `App`) are tested
-with React and jsdom through `test-render.ts`.
+test advances by hand) and `Device` (`lib/test-device.ts`: one person's browser with a disk that
+survives page loads and a network that can be switched off), including property tests over random
+sessions of typing, remote edits and compositions, and over random edits, disconnects and reloads on
+three devices. The components (`NoteTextArea`, `NoteCard`, `BoardPage`, `SyncIndicator`,
+`PwaBanner`, `HomePage`, `App`) are tested with React and jsdom through `test-render.ts`.
 
-**Not yet:** nothing is stored in the browser, so operations made offline are lost if the page is
-closed before the connection returns, and a reload takes the whole board from the server again.
-Presence (cursors, selections) is in the protocol but not shown. There is no undo, no keyboard
-shortcuts for notes and no touch-specific design beyond pointer events. Concurrent edits of the
-same word by two people merge as the sequence CRDT dictates, which can read oddly, and the caret is
-not shown to the other person.
+**Not yet:** presence (cursors, selections) is in the protocol but not shown. There is no undo, no
+keyboard shortcuts for notes and no touch-specific design beyond pointer events. Concurrent edits of
+the same word by two people merge as the sequence CRDT dictates, which can read oddly, and the caret
+is not shown to the other person.
 
-## Offline-first approach
+## Offline-first approach **[implemented]**
 
 - **The local replica is the source of truth.** The UI reads and writes the local CRDT state
-  only. Edits apply immediately and never wait on the network or on acknowledgements.
-- **Durable local storage.** The replica (state plus outbox) is persisted in the browser
-  (IndexedDB) so a reload or crash while offline loses nothing. **[planned]**
-- **Outbox.** There is no separate queue: every local operation is stamped and kept in the
-  replica's store, and the ones the server lacks are exactly the ones its `hello` vector does not
-  cover. After a disconnect nothing is resent blindly (see "Sync protocol"). **[logic implemented]**
+  only. Edits apply immediately and never wait on the network, on acknowledgements or on the disk.
+- **Durable local storage.** Each board's operation log is kept in IndexedDB through the `idb`
+  package (`lib/idb-storage.ts`, database `driftboard`). Everything the replica holds is stored,
+  its own operations and the ones it received, because the log is what the board is rebuilt from
+  and what a version vector is counted over. Three object stores:
+  - `ops`, one row per operation, keyed `[boardId, origin, seq]` so that writing an operation twice
+    changes nothing (two tabs may receive the same one);
+  - `snapshots`, one row per board holding the operations folded so far. When the tail of `ops`
+    reaches 500 rows one transaction folds it into the snapshot and deletes it, so loading a long
+    log reads one record and not thousands. Nothing is discarded: other replicas are still caught up
+    from the full log by version vector;
+  - `sync`, one row per board with what the server was last known to hold.
+- **Loading before connecting.** `openBoardSession` reads the board from storage and puts every
+  operation into a fresh `Board` before anything connects, so a board opens with no network and a
+  reload shows what was there. Only an origin's operations 1..n without a gap can be used; anything
+  after a gap (a partly written store) is left out, counted in `droppedOps`, and fetched again from
+  the server if it has it, so damaged storage never stops a board from opening.
+- **Writes behind the app.** `Persistence` (`lib/persistence.ts`) queues what `SyncConnection`
+  reports (`onStored` for every operation that enters the store, `onHeld` when the server's holdings
+  change) and writes it in order, in as few transactions as it can. If a write fails the failed
+  batch stays at the front of the queue, so nothing later is stored ahead of it (that would leave a
+  gap), the error is shown ("Not saved on this device") and the next change tries again. Closing the
+  page writes what is queued first. Where IndexedDB cannot be opened the board still works from a
+  stand-in in memory and says that it is not kept.
+- **Replica ids.** A page load is a new replica with a new id, because two tabs sharing one id would
+  write conflicting streams. Operations an earlier page load made and never sent are not lost by
+  that: they are in the stored log, the server's `hello` vector does not cover them, and they are
+  sent like any other operation it lacks. The price is that the version vector gains an entry for
+  every page load that wrote something.
+- **Outbox and pending changes.** There is no separate queue. The changes waiting are the operations
+  in the store beyond what the server is known to hold (`countPending`). That is the server's own
+  word: its `hello` vector replaces whatever was stored when a connection starts (the server may
+  have lost data), after which its acks can only add to it. It is stored, so a reload while offline
+  still knows how many changes are waiting. The count is of operations: a text edit is one per
+  character plus one for the note.
 - **Reconnect.** The client reconnects with capped exponential backoff and jitter and opens with
-  `hello`; the vectors decide what is sent. Going offline is a normal state, not an error.
-  **[implemented in `SyncConnection`; operations made offline are lost if the page is closed
-  before reconnecting, until durable storage exists]**
+  `hello`; the vectors decide what is sent, so exactly what the server lacks goes out, once. Going
+  offline is a normal state, not an error. When the browser reports `online` the client connects at
+  once instead of waiting out the delay, and when it reports `offline` it gives up a connection that
+  may look open for minutes (`lib/network.ts`).
+- **The indicator** (`lib/indicator.ts`, `SyncIndicator`) shows *Online* when connected and the
+  server has everything, *Syncing…* when connected with changes still going out (and during the
+  first connection attempt, so opening a board does not flash "offline"), and *Offline* with "N
+  pending changes" when not connected, including while retrying. The syncing state fades in after
+  0.4 s so that the few milliseconds every edit spends unacknowledged are not shown.
 - **Merge on reconnect.** Remote operations are applied to the local replica with the same
   functions used for local edits, so offline edits made by several people converge without a manual
-  merge step.
+  merge step. Two people who edit the same board offline, even after reloading in between, end up
+  with the same board when both are back; an edit to a note someone else deleted meanwhile keeps
+  the note (add wins).
+- **Installable and usable offline (PWA).** `vite-plugin-pwa` generates a Workbox service worker
+  that precaches every file of the build and serves the cached `index.html` for any navigation, so
+  `/` and `/b/:boardId` open with no network, and a web app manifest (`src/pwa-manifest.ts`) with
+  192 and 512 pixel icons and a maskable icon, which is what makes the browser offer to install it.
+  The icons in `public/` come from `scripts/make-icons.mjs`, which draws them with no
+  dependencies. The worker is registered in `main.tsx` and uses the *prompt* flow: a new version
+  waits, `PwaBanner` offers *Reload*, and nothing reloads under someone who is typing. The worker
+  only exists in a build (`vite build` then `vite preview` on port 22102), not in `vite dev`. It
+  caches the app, not the data: boards come from IndexedDB, and the WebSocket to the sync server is
+  not intercepted.
 - **Deterministic core.** Because `packages/crdt` takes its clock and ids as inputs, offline,
   reordering and partition scenarios can be simulated deterministically in unit and property tests,
   and later in Playwright end-to-end tests.
+
+**Not yet.** Two tabs of the same board on one device see each other's changes only through the
+server (they share the stored log but each loaded it once), so they do not sync with each other
+offline until one reloads. The log is never truncated, so storage grows with the board's history, and
+the browser may evict it under storage pressure (`navigator.storage.persist()` is not requested).
+Presence is not stored. A dead connection is noticed by the browser's `offline` event or by the
+socket closing; there is no heartbeat on either side yet.
 
 ## Local-only environment
 

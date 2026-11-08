@@ -24,6 +24,10 @@ export class FakeSocket implements SocketLike {
   /** Text frames the server delivered. */
   readonly received: string[] = [];
   closed = false;
+  /** Set when `close` was asked for but, as on a dead connection, has not happened yet. */
+  closing = false;
+  /** Makes `close` wait until `finishClosing`, as a real socket does when the network is gone. */
+  lingers = false;
   readonly #network: FakeNetwork;
 
   constructor(network: FakeNetwork, conn: string, url: string, handlers: SocketHandlers) {
@@ -41,6 +45,12 @@ export class FakeSocket implements SocketLike {
 
   /** The client closes the connection. */
   close(): void {
+    if (this.lingers) this.closing = true;
+    else this.drop();
+  }
+
+  /** The close that was asked for finally happens. */
+  finishClosing(): void {
     this.drop();
   }
 
@@ -61,6 +71,8 @@ export class FakeSocket implements SocketLike {
 export class FakeNetwork {
   room: Room;
   readonly sockets: FakeSocket[] = [];
+  /** Whether sockets made from now on linger when closed; see `FakeSocket.lingers`. */
+  lingerOnClose = false;
   readonly #bySocketId = new Map<string, FakeSocket>();
   #held: (() => void)[] | null = null;
 
@@ -77,13 +89,17 @@ export class FakeNetwork {
     return this.room.boardId;
   }
 
-  /** Give this to a `SyncConnection` or a session. The connection opens when the test says so. */
-  readonly createSocket: SocketFactory = (url, handlers) => {
+  /** Makes a connection. It opens when the test says so, with `open`. */
+  connect(url: string, handlers: SocketHandlers): FakeSocket {
     const socket = new FakeSocket(this, `connection-${this.sockets.length}`, url, handlers);
+    socket.lingers = this.lingerOnClose;
     this.sockets.push(socket);
     this.#bySocketId.set(socket.conn, socket);
     return socket;
-  };
+  }
+
+  /** Give this to a `SyncConnection` or a session. */
+  readonly createSocket: SocketFactory = (url, handlers) => this.connect(url, handlers);
 
   /** The connection is made: the server accepts it and the client is told it is open. */
   open(socket: FakeSocket): void {

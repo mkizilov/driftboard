@@ -1,5 +1,6 @@
 import { BoardPage } from './components/BoardPage';
 import { HomePage } from './components/HomePage';
+import { PwaBanner } from './components/PwaBanner';
 import { useRoute } from './hooks/use-board';
 
 function NotFound() {
@@ -13,8 +14,7 @@ function NotFound() {
   );
 }
 
-/** Picks the page from the address: `/` is the start page and `/b/:boardId` a board. */
-export function App() {
+function Page() {
   const route = useRoute();
   switch (route.name) {
     case 'home':
@@ -24,4 +24,14 @@ export function App() {
     case 'not-found':
       return <NotFound />;
   }
+}
+
+/** Picks the page from the address: `/` is the start page and `/b/:boardId` a board. */
+export function App() {
+  return (
+    <>
+      <Page />
+      <PwaBanner />
+    </>
+  );
 }

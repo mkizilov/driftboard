@@ -1,16 +1,18 @@
 // @vitest-environment jsdom
 import { afterEach, describe, expect, it } from 'vitest';
-import { createBoardSession } from '../lib/session';
+import { openBoardSession, type BoardSession } from '../lib/session';
+import { MemoryDisk } from '../lib/storage';
 import { FakeNetwork, FakeTimers } from '../lib/test-network';
-import { cleanup, flush, must, render, typeInto } from '../test-render';
+import { cleanup, flush, must, render, settle, typeInto } from '../test-render';
 import { BoardPage } from './BoardPage';
 
 afterEach(cleanup);
 
-function session(net: FakeNetwork, timers: FakeTimers, seed: number) {
-  return createBoardSession({
+function session(net: FakeNetwork, timers: FakeTimers, seed: number, disk = new MemoryDisk()) {
+  return openBoardSession({
     boardId: net.boardId,
     url: 'ws://test.invalid/ws',
+    storage: disk.open(net.boardId),
     randomBytes: (length) =>
       Uint8Array.from({ length }, (_, index) => (seed * 53 + index * 7) % 256),
     createSocket: net.createSocket,
@@ -20,18 +22,19 @@ function session(net: FakeNetwork, timers: FakeTimers, seed: number) {
 }
 
 /** The board page on one session, and a second user on the same board outside React. */
-function open() {
+async function open({ connect = true, disk = new MemoryDisk() } = {}) {
   const net = new FakeNetwork();
   const timers = new FakeTimers();
-  const mine = session(net, timers, 1);
-  const theirs = session(net, timers, 2);
-  const createSession = () => mine;
+  const mine = await session(net, timers, 1, disk);
+  const theirs = await session(net, timers, 2);
+  const createSession = () => Promise.resolve(mine);
   const screen = render(<BoardPage boardId={net.boardId} createSession={createSession} />);
+  await settle();
   const mySocket = must(net.sockets[0]);
 
   theirs.start();
   flush(() => {
-    net.open(mySocket);
+    if (connect) net.open(mySocket);
     net.open(must(net.sockets[1]));
   });
   const canvas = () => must(screen.container.querySelector<HTMLElement>('[data-testid="canvas"]'));
@@ -41,33 +44,118 @@ function open() {
       canvas().dispatchEvent(new MouseEvent('dblclick', { bubbles: true, clientX, clientY }));
     });
   };
-  return { net, timers, mine, theirs, screen, canvas, notes, doubleClick, mySocket };
+  const badge = () => must(screen.container.querySelector('.sync')).textContent;
+  return { net, timers, mine, theirs, screen, canvas, notes, doubleClick, mySocket, badge };
 }
 
 describe('BoardPage', () => {
-  it('shows the connection status as it changes', () => {
-    const { net, timers, mySocket, screen } = open();
-    const badge = () => must(screen.container.querySelector('[role="status"]')).textContent;
-    expect(badge()).toBe('Connected');
+  it('shows the connection as online, syncing or offline, with the changes waiting', async () => {
+    const { net, timers, mySocket, mine, badge } = await open();
+    expect(badge()).toBe('Online');
 
     flush(() => {
       mySocket.drop();
     });
-    expect(badge()).toBe('Offline, retrying…');
+    expect(badge()).toBe('Offline');
+
+    flush(() => {
+      mine.store.createNote(1, 1);
+    });
+    expect(badge()).toMatch(/^Offline · \d+ pending changes?$/);
 
     flush(() => {
       timers.fire();
     });
-    expect(badge()).toBe('Connecting…');
+    expect(badge()).toMatch(/^Syncing…/);
 
     flush(() => {
       net.open(must(net.sockets.at(-1)));
     });
-    expect(badge()).toBe('Connected');
+    expect(badge()).toBe('Online');
   });
 
-  it('adds a note under the pointer on a double-click, and the other user sees it', () => {
-    const { theirs, notes, doubleClick } = open();
+  it('marks the state of the indicator for styling', async () => {
+    const { screen, mySocket } = await open();
+    const indicator = () =>
+      must(screen.container.querySelector('.sync')).getAttribute('data-state');
+    expect(indicator()).toBe('online');
+    flush(() => {
+      mySocket.drop();
+    });
+    expect(indicator()).toBe('offline');
+  });
+
+  it('opens a board from this device with no network, showing the notes and what is waiting', async () => {
+    const disk = new MemoryDisk();
+    const net = new FakeNetwork();
+    const earlier = await session(net, new FakeTimers(), 5, disk);
+    const id = must(earlier.store.createNote(30, 40));
+    earlier.store.editText(id, { start: 0, deleteCount: 0, insert: 'from before' });
+    await earlier.dispose();
+
+    const timers = new FakeTimers();
+    const later = await session(net, timers, 6, disk);
+    const screen = render(
+      <BoardPage boardId={net.boardId} createSession={() => Promise.resolve(later)} />,
+    );
+    await settle();
+    flush(() => {
+      must(net.sockets.at(-1)).drop();
+    });
+
+    const textarea = must(screen.container.querySelector('textarea'));
+    expect(textarea.value).toBe('from before');
+    const badge = must(screen.container.querySelector('.sync')).textContent;
+    expect(badge).toMatch(/^Offline · \d+ pending changes$/);
+  });
+
+  it('says so when the board cannot be opened', async () => {
+    const screen = render(
+      <BoardPage
+        boardId="x"
+        createSession={() => Promise.reject(new Error('the saved data is damaged'))}
+      />,
+    );
+    await settle();
+    expect(must(screen.container.querySelector('[role="alert"]')).textContent).toContain(
+      'the saved data is damaged',
+    );
+  });
+
+  it('warns when changes are not being kept on this device', async () => {
+    const net = new FakeNetwork();
+    const timers = new FakeTimers();
+    const volatile = await session(net, timers, 1, new MemoryDisk({ durable: false }));
+    const screen = render(
+      <BoardPage boardId={net.boardId} createSession={() => Promise.resolve(volatile)} />,
+    );
+    await settle();
+    expect(must(screen.container.querySelector('.save-warning')).textContent).toBe(
+      'Not saved on this device',
+    );
+  });
+
+  it('warns when a write to this device fails, and stops warning when it works again', async () => {
+    const disk = new MemoryDisk();
+    const { mine, screen } = await open({ disk });
+    expect(screen.container.querySelector('.save-warning')).toBeNull();
+
+    disk.failNextWrites(1);
+    flush(() => {
+      mine.store.createNote(1, 1);
+    });
+    await settle();
+    expect(screen.container.querySelector('.save-warning')).not.toBeNull();
+
+    flush(() => {
+      mine.store.createNote(2, 2);
+    });
+    await settle();
+    expect(screen.container.querySelector('.save-warning')).toBeNull();
+  });
+
+  it('adds a note under the pointer on a double-click, and the other user sees it', async () => {
+    const { theirs, notes, doubleClick } = await open();
     expect(notes()).toHaveLength(0);
     doubleClick(300, 200);
     expect(notes()).toHaveLength(1);
@@ -77,8 +165,8 @@ describe('BoardPage', () => {
     expect(theirs.store.getNote(id)).toMatchObject({ x: 190, y: 110 });
   });
 
-  it('sends what is typed into a note to the other user', () => {
-    const { theirs, notes, doubleClick } = open();
+  it('sends what is typed into a note to the other user', async () => {
+    const { theirs, notes, doubleClick } = await open();
     doubleClick(300, 200);
     const textarea = must(must(notes()[0]).querySelector('textarea'));
     typeInto(textarea, 'hello');
@@ -86,8 +174,8 @@ describe('BoardPage', () => {
     expect(theirs.store.getNote(id)?.text).toBe('hello');
   });
 
-  it('shows another user’s typing without moving the caret', () => {
-    const { theirs, notes, doubleClick } = open();
+  it('shows another user’s typing without moving the caret', async () => {
+    const { theirs, notes, doubleClick } = await open();
     doubleClick(300, 200);
     const id = must(theirs.store.getIds()[0]);
     flush(() => {
@@ -106,8 +194,8 @@ describe('BoardPage', () => {
     expect(document.activeElement).toBe(textarea);
   });
 
-  it('removes a note that the other user deletes', () => {
-    const { theirs, notes, doubleClick } = open();
+  it('removes a note that the other user deletes', async () => {
+    const { theirs, notes, doubleClick } = await open();
     doubleClick(300, 200);
     const id = must(theirs.store.getIds()[0]);
     flush(() => {
@@ -116,8 +204,8 @@ describe('BoardPage', () => {
     expect(notes()).toHaveLength(0);
   });
 
-  it('deletes a note from its button, for everyone', () => {
-    const { theirs, notes, doubleClick } = open();
+  it('deletes a note from its button, for everyone', async () => {
+    const { theirs, notes, doubleClick } = await open();
     doubleClick(300, 200);
     flush(() => {
       must(must(notes()[0]).querySelector<HTMLButtonElement>('[aria-label="Delete note"]')).click();
@@ -126,8 +214,8 @@ describe('BoardPage', () => {
     expect(theirs.store.getIds()).toHaveLength(0);
   });
 
-  it('only adds a note when the background itself is double-clicked', () => {
-    const { notes, doubleClick } = open();
+  it('only adds a note when the background itself is double-clicked', async () => {
+    const { notes, doubleClick } = await open();
     doubleClick(300, 200);
     flush(() => {
       must(must(notes()[0]).querySelector('textarea')).dispatchEvent(
@@ -137,9 +225,32 @@ describe('BoardPage', () => {
     expect(notes()).toHaveLength(1);
   });
 
-  it('closes the connection when the page goes away', () => {
-    const { mySocket } = open();
+  it('closes the connection when the page goes away', async () => {
+    const { mySocket } = await open();
     cleanup();
     expect(mySocket.closed).toBe(true);
+  });
+
+  it('closes a board that finished opening after the page had gone', async () => {
+    const net = new FakeNetwork();
+    const opened = await session(net, new FakeTimers(), 1);
+    let disposed = 0;
+    const late: BoardSession = {
+      ...opened,
+      dispose: () => {
+        disposed += 1;
+        return opened.dispose();
+      },
+    };
+    let finish: (value: BoardSession) => void = () => {};
+    const slow = new Promise<BoardSession>((resolve) => {
+      finish = resolve;
+    });
+    render(<BoardPage boardId={net.boardId} createSession={() => slow} />);
+    cleanup();
+    finish(late);
+    await settle();
+    expect(disposed).toBe(1);
+    expect(net.sockets).toHaveLength(0);
   });
 });

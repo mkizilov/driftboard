@@ -1,9 +1,16 @@
-import { parseMessage } from '@driftboard/protocol';
+import { VersionVector } from '@driftboard/crdt';
+import { PROTOCOL_VERSION, parseMessage, type StampedOp } from '@driftboard/protocol';
 import { describe, expect, it } from 'vitest';
 import { BoardStore } from './board-store';
-import { SyncConnection, type ConnectionStatus } from './sync-connection';
+import { restoreStore } from './persistence';
+import {
+  SyncConnection,
+  countPending,
+  type ConnectionStatus,
+  type SyncConnectionOptions,
+} from './sync-connection';
 import { FakeNetwork, FakeTimers, serverError, type FakeSocket } from './test-network';
-import { replica } from './test-support';
+import { operations, replica } from './test-support';
 
 function must<T>(value: T | undefined): T {
   if (value === undefined) throw new Error('expected a value');
@@ -13,7 +20,7 @@ function must<T>(value: T | undefined): T {
 function setup(random: () => number = () => 0) {
   const net = new FakeNetwork();
   const timers = new FakeTimers();
-  const client = (seed: number) => {
+  const client = (seed: number, extra: Partial<SyncConnectionOptions> = {}) => {
     const board = replica(seed);
     const connection = new SyncConnection({
       boardId: net.boardId,
@@ -24,6 +31,7 @@ function setup(random: () => number = () => 0) {
       timers,
       random,
       retry: { initialMs: 100, maxMs: 1000 },
+      ...extra,
     });
     const store = new BoardStore(board, (ops) => {
       connection.submit(ops);
@@ -385,5 +393,389 @@ describe('SyncConnection: a server that misbehaves', () => {
     expect(a.connection.getStatus()).toBe('online');
     expect(a.connection.lastError).toBeNull();
     expect(timers.delays).toHaveLength(0);
+  });
+});
+
+/** Collects what a connection reports to storage. */
+function recorder() {
+  const stored: StampedOp[] = [];
+  const held: VersionVector[] = [];
+  return {
+    stored,
+    held,
+    options: {
+      onStored: (ops: readonly StampedOp[]) => {
+        stored.push(...ops);
+      },
+      onHeld: (vector: VersionVector) => {
+        held.push(vector);
+      },
+    },
+  };
+}
+
+describe('countPending', () => {
+  it('counts the operations a vector does not cover', () => {
+    const ops = operations(1, ['abc']);
+    const origin = must(ops[0]).origin;
+    const { store } = restoreStore(ops);
+    expect(countPending(store, VersionVector.empty)).toBe(ops.length);
+    expect(countPending(store, VersionVector.from([[origin, 2]]))).toBe(ops.length - 2);
+    expect(countPending(store, VersionVector.from([[origin, ops.length]]))).toBe(0);
+  });
+
+  it('ignores holdings the store does not have and other origins', () => {
+    const ops = operations(1);
+    const other = must(operations(2)[0]).origin;
+    const { store } = restoreStore(ops);
+    expect(countPending(store, VersionVector.from([[other, 50]]))).toBe(ops.length);
+    expect(countPending(store, VersionVector.from([[must(ops[0]).origin, 999]]))).toBe(0);
+  });
+});
+
+describe('SyncConnection: pending changes', () => {
+  it('counts what the server does not hold, and nothing once it has it', () => {
+    const { client, online } = setup();
+    const a = client(1);
+    expect(a.connection.getState().pending).toBe(0);
+    const id = must(a.store.createNote(1, 2));
+    a.store.editText(id, { start: 0, deleteCount: 0, insert: 'hi' });
+    expect(a.connection.getState().pending).toBeGreaterThanOrEqual(3);
+
+    online(a);
+    expect(a.connection.getState()).toMatchObject({ status: 'online', pending: 0 });
+  });
+
+  it('keeps counting while offline and clears the count when the server has the changes', () => {
+    const { client, online, timers, net, latest } = setup();
+    const a = client(1);
+    const socket = online(a);
+    socket.drop();
+    const id = must(a.store.createNote(1, 2));
+    const afterOne = a.connection.getState().pending;
+    a.store.editText(id, { start: 0, deleteCount: 0, insert: 'hi' });
+    expect(a.connection.getState().pending).toBeGreaterThan(afterOne);
+
+    timers.fire();
+    net.open(latest());
+    expect(a.connection.getState().pending).toBe(0);
+  });
+
+  it('does not count what other users made', () => {
+    const { client, online } = setup();
+    const a = client(1);
+    const b = client(2);
+    online(a);
+    online(b);
+    b.store.createNote(1, 1);
+    expect(a.connection.getState().pending).toBe(0);
+    expect(b.connection.getState().pending).toBe(0);
+  });
+
+  it('tells its listeners when the count changes, even if the status does not', () => {
+    const { client } = setup();
+    const a = client(1);
+    let calls = 0;
+    a.connection.subscribe(() => {
+      calls += 1;
+    });
+    a.store.createNote(1, 2);
+    expect(calls).toBe(1);
+    expect(a.connection.getStatus()).toBe('offline');
+  });
+
+  it('hands out the same state object until something changes', () => {
+    const { client } = setup();
+    const a = client(1);
+    const state = a.connection.getState();
+    let calls = 0;
+    a.connection.subscribe(() => {
+      calls += 1;
+    });
+    a.connection.submit([]);
+    expect(a.connection.getState()).toBe(state);
+    expect(calls).toBe(0);
+    a.store.createNote(1, 2);
+    expect(a.connection.getState()).not.toBe(state);
+  });
+
+  it('counts failed attempts, and starts again once a connection works', () => {
+    const { net, timers, client, latest } = setup();
+    const a = client(1);
+    a.connection.start();
+    expect(a.connection.getState().failures).toBe(0);
+    latest().drop();
+    timers.fire();
+    latest().drop();
+    expect(a.connection.getState().failures).toBe(2);
+    timers.fire();
+    net.open(latest());
+    expect(a.connection.getState()).toMatchObject({ status: 'online', failures: 0 });
+  });
+});
+
+describe('SyncConnection: reporting to storage', () => {
+  it('reports the operations it authors once each, numbered from 1', () => {
+    const { client } = setup();
+    const recording = recorder();
+    const a = client(1, recording.options);
+    const id = must(a.store.createNote(1, 2));
+    a.store.editText(id, { start: 0, deleteCount: 0, insert: 'abc' });
+    const keys = recording.stored.map((op) => `${op.origin}:${op.seq}`);
+    expect(hasNoDuplicates(keys)).toBe(true);
+    expect(recording.stored.map((op) => op.seq)).toEqual(
+      recording.stored.map((_, index) => index + 1),
+    );
+    expect(recording.stored.every((op) => op.origin === a.board.replicaId)).toBe(true);
+  });
+
+  it('reports the operations it receives once each', () => {
+    const { client, online } = setup();
+    const recording = recorder();
+    const a = client(1, recording.options);
+    const b = client(2);
+    online(a);
+    online(b);
+    const id = must(b.store.createNote(1, 2));
+    b.store.editText(id, { start: 0, deleteCount: 0, insert: 'xy' });
+    const keys = recording.stored.map((op) => `${op.origin}:${op.seq}`);
+    expect(keys.length).toBeGreaterThanOrEqual(3);
+    expect(hasNoDuplicates(keys)).toBe(true);
+    expect(recording.stored.every((op) => op.origin === b.board.replicaId)).toBe(true);
+  });
+
+  it('reports what the server holds when it tells, and when that grows', () => {
+    const { client, online } = setup();
+    const recording = recorder();
+    const a = client(1, recording.options);
+    const b = client(2);
+    online(b);
+    b.store.createNote(1, 1);
+
+    online(a);
+    expect(recording.held).toHaveLength(1);
+    expect(recording.held[0]?.get(b.board.replicaId)).toBeGreaterThan(0);
+
+    a.store.createNote(2, 2);
+    expect(recording.held.length).toBeGreaterThan(1);
+    expect(recording.held.at(-1)?.get(a.board.replicaId)).toBeGreaterThan(0);
+  });
+
+  it('does not report holdings that did not change', () => {
+    const { client, online, timers, net, latest } = setup();
+    const recording = recorder();
+    const a = client(1, recording.options);
+    const socket = online(a);
+    a.store.createNote(1, 1);
+    const before = recording.held.length;
+    socket.drop();
+    timers.fire();
+    net.open(latest());
+    expect(recording.held).toHaveLength(before);
+  });
+});
+
+describe('SyncConnection: starting from what the device holds', () => {
+  /** Operations a replica authored on an earlier page load and never sent. */
+  function unsent() {
+    const { client } = setup();
+    const recording = recorder();
+    const earlier = client(9, recording.options);
+    const id = must(earlier.store.createNote(5, 6));
+    earlier.store.editText(id, { start: 0, deleteCount: 0, insert: 'yo' });
+    return { id, ops: recording.stored, origin: earlier.board.replicaId };
+  }
+
+  it('counts the operations it starts with that the server is not known to hold', () => {
+    const { client } = setup();
+    const { ops, origin } = unsent();
+    const { store } = restoreStore(ops);
+    const none = client(2, { initial: { store, held: VersionVector.empty } });
+    const some = client(3, { initial: { store, held: VersionVector.from([[origin, 2]]) } });
+    expect(none.connection.getState().pending).toBe(ops.length);
+    expect(some.connection.getState().pending).toBe(ops.length - 2);
+  });
+
+  it('sends them on connecting, so another replica gets them', () => {
+    const { client, online } = setup();
+    const { id, ops } = unsent();
+    const { store } = restoreStore(ops);
+    const reopened = client(2, { initial: { store, held: VersionVector.empty } });
+    online(reopened);
+    const watcher = client(3);
+    online(watcher);
+    expect(watcher.board.getNote(id)).toMatchObject({ x: 5, y: 6, text: 'yo' });
+    expect(reopened.connection.getState().pending).toBe(0);
+  });
+
+  it('believes what the server says it holds over what was stored', () => {
+    const { client, online } = setup();
+    const { id, ops, origin } = unsent();
+    const { store } = restoreStore(ops);
+    const recording = recorder();
+    // The stored holdings claim the server has everything; it has nothing.
+    const reopened = client(2, {
+      ...recording.options,
+      initial: { store, held: VersionVector.from([[origin, ops.length]]) },
+    });
+    expect(reopened.connection.getState().pending).toBe(0);
+    online(reopened);
+    expect(recording.held[0]?.get(origin)).toBe(0);
+    const watcher = client(3);
+    online(watcher);
+    expect(watcher.board.getNote(id)).toMatchObject({ text: 'yo' });
+  });
+
+  it('keeps counting operations as pending until the server confirms them, whatever was stored', () => {
+    const { net, client, latest } = setup();
+    const { ops, origin } = unsent();
+    const { store } = restoreStore(ops);
+    const reopened = client(2, {
+      initial: { store, held: VersionVector.from([[origin, ops.length]]) },
+    });
+    reopened.connection.start();
+    const socket = latest();
+    // A server that answers the hello and then says nothing more: it never confirms anything.
+    socket.handlers.open();
+    net.injectMessage(socket, {
+      type: 'hello',
+      version: PROTOCOL_VERSION,
+      replicaId: net.room.serverId,
+      boardId: net.boardId,
+      versionVector: [],
+    });
+    expect(reopened.connection.getState()).toMatchObject({ status: 'online', pending: ops.length });
+  });
+
+  it('reports nothing as new for operations it started with', () => {
+    const { client, online } = setup();
+    const { ops } = unsent();
+    const { store } = restoreStore(ops);
+    const recording = recorder();
+    const reopened = client(2, {
+      ...recording.options,
+      initial: { store, held: VersionVector.empty },
+    });
+    online(reopened);
+    expect(recording.stored).toEqual([]);
+  });
+});
+
+describe('SyncConnection: the network comes and goes', () => {
+  it('connects at once on retryNow instead of waiting out the delay', () => {
+    const { net, timers, client, latest } = setup();
+    const a = client(1);
+    a.connection.start();
+    latest().drop();
+    expect(timers.delays).toEqual([50]);
+
+    a.connection.retryNow();
+    expect(timers.delays).toEqual([]);
+    expect(net.sockets).toHaveLength(2);
+    expect(a.connection.getStatus()).toBe('connecting');
+  });
+
+  it('keeps backing off if the attempt after retryNow fails too', () => {
+    const { timers, client, latest } = setup();
+    const a = client(1);
+    a.connection.start();
+    latest().drop();
+    a.connection.retryNow();
+    latest().drop();
+    expect(timers.delays).toEqual([100]);
+  });
+
+  it('does nothing on retryNow when no retry is waiting', () => {
+    const { net, client, online } = setup();
+    const a = client(1);
+    a.connection.retryNow();
+    expect(net.sockets).toHaveLength(0);
+    online(a);
+    a.connection.retryNow();
+    expect(net.sockets).toHaveLength(1);
+  });
+
+  it('does nothing on retryNow once disposed', () => {
+    const { net, client, latest } = setup();
+    const a = client(1);
+    a.connection.start();
+    latest().drop();
+    a.connection.dispose();
+    a.connection.retryNow();
+    expect(net.sockets).toHaveLength(1);
+  });
+
+  it('drops a connection at once when the network is lost, and retries', () => {
+    const { timers, client, online } = setup();
+    const a = client(1);
+    const socket = online(a);
+    a.connection.networkLost();
+    expect(socket.closed).toBe(true);
+    expect(a.connection.getStatus()).toBe('offline');
+    expect(a.connection.getState().failures).toBe(1);
+    expect(timers.delays).toEqual([50]);
+    expect(a.connection.lastError).toBeNull();
+  });
+
+  it('does not wait for a socket that is slow to close', () => {
+    const { net, timers, client, online } = setup();
+    net.lingerOnClose = true;
+    const a = client(1);
+    const socket = online(a);
+
+    a.connection.networkLost();
+    expect(socket.closing).toBe(true);
+    expect(socket.closed).toBe(false);
+    expect(a.connection.getStatus()).toBe('offline');
+    expect(timers.delays).toEqual([50]);
+
+    // The close finally happens, long after.
+    socket.finishClosing();
+    expect(timers.delays).toHaveLength(1);
+    expect(a.connection.getState().failures).toBe(1);
+  });
+
+  it('gives up a connection that is still being made, too', () => {
+    const { timers, client, latest } = setup();
+    const a = client(1);
+    a.connection.start();
+    const attempt = latest();
+    a.connection.networkLost();
+    expect(attempt.closed).toBe(true);
+    expect(a.connection.getStatus()).toBe('offline');
+    expect(timers.delays).toHaveLength(1);
+  });
+
+  it('does not schedule a second retry when the dropped socket reports its close', () => {
+    const { timers, client, online } = setup();
+    const a = client(1);
+    const socket = online(a);
+    a.connection.networkLost();
+    socket.handlers.close();
+    socket.handlers.message('late');
+    expect(timers.delays).toHaveLength(1);
+    expect(a.connection.lastError).toBeNull();
+  });
+
+  it('does nothing when the network is lost with no connection', () => {
+    const { timers, client } = setup();
+    const a = client(1);
+    a.connection.networkLost();
+    expect(timers.delays).toEqual([]);
+    expect(a.connection.getState().failures).toBe(0);
+  });
+
+  it('keeps the changes made while the network was gone and sends them when it returns', () => {
+    const { net, timers, client, online, latest } = setup();
+    const a = client(1);
+    const b = client(2);
+    online(a);
+    online(b);
+    a.connection.networkLost();
+    const id = must(a.store.createNote(1, 2));
+    a.connection.retryNow();
+    net.open(latest());
+    expect(timers.delays).toEqual([]);
+    expect(b.board.getNote(id)).toMatchObject({ x: 1, y: 2 });
   });
 });

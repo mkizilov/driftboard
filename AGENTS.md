@@ -25,7 +25,7 @@ pnpm-workspace TypeScript monorepo (see `DESIGN.md` for the data model, CRDTs an
 | `packages/crdt`     | Pure CRDT library. Implemented: replica ids, op ids, Lamport/hybrid logical clocks, version vectors, LWW register, add-wins map, text sequence (Fugue tree, `TextSequence`) with a causal delivery buffer, the `Board` document model (add-wins map of notes with LWW fields, per-note text, op log, JSON, change subscription), plus a generic convergence harness (`convergence*.ts`, test-only). No runtime deps. |
 | `packages/protocol` | Sync messages validated with zod (`hello`, `ops`, `ack`, `presence`, `error`) and the sync logic as pure functions: operation store, per-connection session, server `Room`. Depends on `@driftboard/crdt`. |
 | `apps/server`       | Node 22 sync server: `ws` WebSockets (one room per unguessable board id, using the protocol's `Room`), `GET /healthz`, `better-sqlite3` in `./.data/` with each board's log as a compacted snapshot plus a tail. |
-| `apps/web`          | React 18 + Vite client.                                                    |
+| `apps/web`          | React 18 + Vite client: `/` creates a board, `/b/:boardId` is the canvas. Framework-free logic in `src/lib` (text diff, caret, text binding, board store, sync connection, viewport, route); thin React in `src/components` and `src/hooks`. Component tests use jsdom through `src/test-render.ts`. |
 
 Workspace packages are consumed from source (`exports` points at `src/index.ts`); there is no
 separate library build step. The server runs through `tsx`.
@@ -83,16 +83,23 @@ disable those rules.
 
 ## Known state
 
-The scaffold, `packages/crdt`, `packages/protocol` and `apps/server` (turns 1-7) were written in an
-environment with no network access, so no `pnpm install` has run: there is no `pnpm-lock.yaml` yet
-and `pnpm check` has not been executed. The tests were only run under throwaway minimal stand-ins
-for Vitest, fast-check and zod (which cover only the features used), plus, for the server, an
-adapter over Node's built-in `node:sqlite` in place of better-sqlite3 and a hand-written RFC 6455
-server in place of `ws` (its clients were Node's own WebSocket), on Node's built-in type stripping.
-Nothing has run against the real packages or `tsc`/ESLint, so type or lint errors and failures that
-only the real packages would show are still possible; the real `ws` and better-sqlite3 integration in
-`apps/server` is the least verified part. `apps/web` has never been run (it needs React and Vite). On
-the first machine with
+The scaffold, `packages/crdt`, `packages/protocol`, `apps/server` and `apps/web` (turns 1-8) were
+written in an environment with no network access, so no `pnpm install` has run: there is no
+`pnpm-lock.yaml` yet and `pnpm check` has not been executed. The tests were only run under throwaway
+minimal stand-ins for Vitest, fast-check and zod (which cover only the features used), plus, for the
+server, an adapter over Node's built-in `node:sqlite` in place of better-sqlite3 and a hand-written
+RFC 6455 server in place of `ws` (its clients were Node's own WebSocket), on Node's built-in type
+stripping. Nothing has run against the real packages or `tsc`/ESLint, so type or lint errors and
+failures that only the real packages would show are still possible; the real `ws` and better-sqlite3
+integration in `apps/server` is the least verified part.
+
+In `apps/web` the framework-free tests (`src/lib/*.test.ts`) ran under those stand-ins. React, Vite
+and jsdom have never been installed, so the `.tsx` files, the hooks, `Canvas` pointer and wheel
+handling, the styles and the five component tests (`NoteTextArea`, `NoteCard`, `BoardPage`,
+`HomePage`, `App`) have never been compiled or executed, and nothing has been seen in a browser. The
+component tests are the first thing to run: if they fail, check them against the real DOM before
+changing `lib/text-binding.ts`, whose behaviour the `lib` tests pin down. Dependency versions added
+for the web app (`jsdom`, `fast-check`) are from memory, like the others. On the first machine with
 network access (Node 22.12 + corepack), run `pnpm install`, then `pnpm format`, fix anything
 `pnpm check` reports, commit the generated `pnpm-lock.yaml`, and switch the CI install step to
 `--frozen-lockfile`. Delete this section once that is done.

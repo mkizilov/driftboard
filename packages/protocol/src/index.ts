@@ -1,3 +1,4 @@
+export * from './board-id';
 export * from './constants';
 export * from './messages';
 export * from './ops';

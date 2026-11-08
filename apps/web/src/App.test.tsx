@@ -1,12 +1,38 @@
-import { PROTOCOL_VERSION } from '@driftboard/protocol';
-import { renderToStaticMarkup } from 'react-dom/server';
-import { describe, expect, it } from 'vitest';
+// @vitest-environment jsdom
+import { afterEach, describe, expect, it } from 'vitest';
 import { App } from './App';
+import { cleanup, flush, render } from './test-render';
+
+afterEach(cleanup);
+
+function renderAt(path: string) {
+  window.history.pushState(null, '', path);
+  return render(<App />);
+}
 
 describe('App', () => {
-  it('renders the title and the protocol version', () => {
-    const html = renderToStaticMarkup(<App />);
-    expect(html).toContain('<h1>driftboard</h1>');
-    expect(html).toContain(`v${PROTOCOL_VERSION}`);
+  it('shows the start page at the root', () => {
+    const screen = renderAt('/');
+    expect(screen.container.querySelector('h1')?.textContent).toBe('driftboard');
+    expect(screen.container.querySelector('button.create-board')).not.toBeNull();
+  });
+
+  it('says so when there is nothing at an address', () => {
+    expect(renderAt('/elsewhere').container.querySelector('h1')?.textContent).toBe('Not found');
+  });
+
+  it('does not open a board for an id that cannot be one', () => {
+    const screen = renderAt('/b/short');
+    expect(screen.container.querySelector('h1')?.textContent).toBe('Not found');
+    expect(screen.container.querySelector('[data-testid="canvas"]')).toBeNull();
+  });
+
+  it('follows the address when it changes', () => {
+    const screen = renderAt('/');
+    flush(() => {
+      window.history.pushState(null, '', '/elsewhere');
+      window.dispatchEvent(new PopStateEvent('popstate'));
+    });
+    expect(screen.container.querySelector('h1')?.textContent).toBe('Not found');
   });
 });

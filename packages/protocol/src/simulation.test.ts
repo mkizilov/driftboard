@@ -354,7 +354,7 @@ function expectSettled(network: Network): void {
     expect(isSynced(session, room.store)).toBe(true);
   }
   for (const client of network.clients) {
-    const session = must(client.session);
+    const session = must(client.session ?? undefined);
     expect(flush(session, client.store).send).toEqual([]);
     expect(isSynced(session, client.store)).toBe(true);
   }

@@ -1,0 +1,272 @@
+:root {
+  --ink: #26241f;
+  --paper: #f6f4ee;
+  --grid: #d9d5c8;
+  --bar: #ffffff;
+  --accent: #3b6fd4;
+  --yellow: #fff1a8;
+  --pink: #ffc9d9;
+  --green: #c9f0c1;
+  --blue: #c4dcff;
+  --purple: #e0d0ff;
+  --orange: #ffd9a8;
+  font-family: system-ui, -apple-system, 'Segoe UI', sans-serif;
+  color: var(--ink);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--paper);
+}
+
+button {
+  font: inherit;
+  cursor: pointer;
+}
+
+/* ---- Start page ---- */
+
+.home {
+  max-width: 34rem;
+  margin: 12vh auto 0;
+  padding: 0 1.5rem;
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+  align-items: flex-start;
+}
+
+.create-board {
+  padding: 0.7rem 1.4rem;
+  border: 0;
+  border-radius: 0.5rem;
+  background: var(--accent);
+  color: #fff;
+  font-weight: 600;
+}
+
+.loading {
+  padding: 2rem;
+}
+
+/* ---- Board page ---- */
+
+.board-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+}
+
+.board-bar {
+  display: flex;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.5rem 1rem;
+  background: var(--bar);
+  border-bottom: 1px solid var(--grid);
+}
+
+.home-link {
+  font-weight: 700;
+  color: inherit;
+  text-decoration: none;
+}
+
+.hint {
+  flex: 1;
+  color: #77736a;
+  font-size: 0.85rem;
+}
+
+.connection {
+  font-size: 0.85rem;
+  padding: 0.15rem 0.6rem;
+  border-radius: 1rem;
+  background: #eee;
+}
+
+.connection[data-status='online'] {
+  background: #d7f2d2;
+}
+
+.connection[data-status='offline'] {
+  background: #ffd9d4;
+}
+
+.copy-link {
+  padding: 0.35rem 0.8rem;
+  border: 1px solid var(--grid);
+  border-radius: 0.4rem;
+  background: var(--bar);
+}
+
+/* ---- Canvas ---- */
+
+.canvas {
+  position: relative;
+  flex: 1;
+  overflow: hidden;
+  touch-action: none;
+  background-image: radial-gradient(circle, var(--grid) 1px, transparent 1.5px);
+  cursor: grab;
+}
+
+.world {
+  position: absolute;
+  top: 0;
+  left: 0;
+  transform-origin: 0 0;
+}
+
+.empty-hint {
+  position: absolute;
+  inset: 40% 0 auto;
+  margin: 0;
+  text-align: center;
+  color: #77736a;
+  pointer-events: none;
+}
+
+.zoom-controls {
+  position: absolute;
+  right: 1rem;
+  bottom: 1rem;
+  display: flex;
+  background: var(--bar);
+  border: 1px solid var(--grid);
+  border-radius: 0.5rem;
+  overflow: hidden;
+}
+
+.zoom-controls button {
+  min-width: 2.5rem;
+  padding: 0.4rem 0.6rem;
+  border: 0;
+  background: transparent;
+}
+
+/* ---- Notes ---- */
+
+.note {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  border-radius: 0.3rem;
+  box-shadow: 0 2px 6px rgb(0 0 0 / 0.2);
+  background: var(--yellow);
+  cursor: auto;
+}
+
+.note.dragging {
+  box-shadow: 0 8px 18px rgb(0 0 0 / 0.3);
+}
+
+.note[data-color='pink'] {
+  background: var(--pink);
+}
+.note[data-color='green'] {
+  background: var(--green);
+}
+.note[data-color='blue'] {
+  background: var(--blue);
+}
+.note[data-color='purple'] {
+  background: var(--purple);
+}
+.note[data-color='orange'] {
+  background: var(--orange);
+}
+
+.note-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 0.25rem 0.4rem;
+  background: rgb(0 0 0 / 0.07);
+  cursor: grab;
+  user-select: none;
+  touch-action: none;
+}
+
+.note.dragging .note-header {
+  cursor: grabbing;
+}
+
+.note-colors {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.swatch {
+  width: 1rem;
+  height: 1rem;
+  padding: 0;
+  border: 1px solid rgb(0 0 0 / 0.35);
+  border-radius: 50%;
+}
+
+.swatch[aria-pressed='true'] {
+  outline: 2px solid var(--ink);
+  outline-offset: 1px;
+}
+
+.swatch[data-color='yellow'] {
+  background: var(--yellow);
+}
+.swatch[data-color='pink'] {
+  background: var(--pink);
+}
+.swatch[data-color='green'] {
+  background: var(--green);
+}
+.swatch[data-color='blue'] {
+  background: var(--blue);
+}
+.swatch[data-color='purple'] {
+  background: var(--purple);
+}
+.swatch[data-color='orange'] {
+  background: var(--orange);
+}
+
+.note-delete {
+  width: 1.5rem;
+  height: 1.5rem;
+  border: 0;
+  border-radius: 50%;
+  background: transparent;
+  font-size: 1.1rem;
+  line-height: 1;
+}
+
+.note-delete:hover {
+  background: rgb(0 0 0 / 0.12);
+}
+
+.note-text {
+  flex: 1;
+  width: 100%;
+  padding: 0.5rem;
+  border: 0;
+  resize: none;
+  background: transparent;
+  font: inherit;
+  color: inherit;
+}
+
+.note-text:focus {
+  outline: 2px solid rgb(0 0 0 / 0.25);
+  outline-offset: -2px;
+}

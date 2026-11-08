@@ -14,7 +14,7 @@ repository today, **[planned]** is designed here but not yet implemented.
 | `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks.   | implemented |
 | `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.                | implemented |
 | `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | implemented |
-| `apps/web`          | React 18 + Vite client.                                                  | scaffolded  |
+| `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.          | implemented |
 
 Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
 `crdt`; `crdt` depends on nothing.
@@ -319,7 +319,7 @@ and `board-json.ts` (JSON).
   The harness also checks that every local call has exactly the intended effect on what the board
   shows.
 
-## Sync protocol **[implemented as pure logic; the server uses it, the client wiring is planned]**
+## Sync protocol **[implemented as pure logic; the server and the web client use it]**
 
 Source: `packages/protocol/src`. `messages.ts` (zod schemas, parse/encode), `ops.ts` and `store.ts`
 (stamped operations and the operation store), `sync.ts` (one connection's state machine), `room.ts`
@@ -399,9 +399,9 @@ no original message may carry an operation its receiver already holds, and nobod
 error. Without faults every operation crosses exactly one link up and one link down per other
 client; a reconnect sends exactly the missing operations.
 
-**Not yet:** there is no client-side wiring, operations are never compacted away, and replica ids
-must be unique per device and tab (two live tabs sharing one id would write conflicting streams;
-`conflicting_op` catches that only when the operations differ).
+**Not yet:** operations are never compacted away, and replica ids must be unique per device and tab
+(two live tabs sharing one id would write conflicting streams; `conflicting_op` catches that only
+when the operations differ). The web client takes a fresh id on every page load for this reason.
 
 ## Server **[implemented]**
 
@@ -488,6 +488,88 @@ on connections or rooms, compaction does not `VACUUM` (freed pages are reused bu
 shrink), loading and compacting a board are synchronous and block the event loop for their duration,
 and the server holds a board's whole log in memory while it is open.
 
+## Web client **[implemented]**
+
+Source: `apps/web/src`. React 18 and Vite; routing is two paths read from `location` (`/` and
+`/b/:boardId`, `lib/route.ts`), with no router library. Everything that is not drawing lives in
+plain modules under `lib/` that do not import React, so it is tested without a browser; the
+components are thin.
+
+**Pages.** `/` makes a board: a new id from `crypto.getRandomValues` (`generateBoardId` from
+`@driftboard/protocol`, the same rule the server enforces) and a client-side navigation to
+`/b/:boardId`. A board page shows the canvas, the connection status (connecting, connected, offline)
+and a *Copy link* button, since the link is the only access control (see "Server"). An id the server
+would refuse is shown as "Not found" without opening a socket.
+
+**From document to React.** `BoardStore` (`lib/board-store.ts`) follows the `Board` through its
+change events and keeps one immutable `NoteView` per note, replaced only when that note's fields or
+text really changed, and a list of note ids, replaced only when a note appears or disappears. React
+reads it with `useSyncExternalStore`: `useNoteIds` subscribes to the list and `useNote(id)` to one
+note, so a change to one note renders only that note's `NoteCard` (memoised on `store`, `id` and a
+stable `viewportRef`), and panning or zooming renders no note. Ids are in a fixed order and
+stacking is the note's `z`, so raising a note never reorders the DOM or makes React move a focused
+textarea. The store's mutators change the board and hand the resulting operations to
+`SyncConnection.submit`; changing nothing (moving to the same place, picking the same colour,
+raising the top note) sends nothing, and a note that someone else deleted meanwhile is ignored
+quietly.
+
+**Sync.** `SyncConnection` (`lib/sync-connection.ts`) runs the protocol's pure `Session` over a
+WebSocket (replaceable in tests through `SocketFactory`, and its timers through `Timers`): it opens
+with `hello`, applies what the server sends with `Board.applyRemote`, and sends local operations once
+the server's `hello` has arrived. It reconnects forever with delays of 500 ms doubling to 15 s, each
+scaled by a random factor between 0.5 and 1. Events from a socket that has been replaced are ignored.
+A message that is not text or not valid, or an `error` from the server, closes the connection (the
+reason is kept in `lastError`) and the usual retry follows.
+`createBoardSession` joins the replica id (new on every page load), `Board`, `BoardStore` and
+`SyncConnection`.
+
+**Canvas.** The camera is `{x, y, scale}` (`lib/viewport.ts`, pure): a board point is drawn at
+`world * scale + (x, y)`. Dragging the background pans, scrolling pans, a pinch or Ctrl/Cmd + scroll
+zooms around the pointer (scale 0.2 to 3), and there are zoom buttons. The wheel handler is added
+by hand because React's wheel listeners are passive and cannot stop the page from scrolling.
+Double-clicking the background adds a note centred on the pointer. A note is dragged by its header;
+it follows the pointer locally and the move is written to the board once, when the pointer is
+released, so one drag is one operation. Notes can be recoloured from six swatches and deleted.
+
+**Text and the caret.** The textarea is uncontrolled, so React never overwrites it behind the
+browser's back, and `NoteTextArea` is a thin shell over `createTextBinding` (`lib/text-binding.ts`):
+
+- *The user's change becomes one operation.* `diffText` (`lib/text-diff.ts`) trims the common prefix
+  and suffix of the last text the textarea and the document agreed on and the textarea's new value.
+  What is left is one replacement, which is the shape of `Board.editText`, so typing, pasting,
+  cutting and replacing a selection are each one edit however long. It is counted in code points as
+  the board counts, and also in UTF-16 units as the DOM counts; a surrogate pair is never cut in
+  half. When a text is ambiguous (typing a second `a` after `a`) the earliest position is chosen.
+- *Remote changes keep the caret.* When the document text changes by other means, `applyRemoteText`
+  (`lib/caret.ts`) diffs the textarea's current value against it, sets the value, and puts the
+  selection back through `mapIndex`: a caret before the change stays, one after it moves with the
+  text, one inside replaced text goes to the end of the replacement, and a caret exactly where text
+  is inserted stays in front of it. Direction and scroll position are kept. A textarea without
+  focus is only updated. Assigning `value` directly would move the caret to the end.
+- *Input method composition.* While a composition (Japanese, Chinese, accents) is in progress
+  nothing is reported and nothing is overwritten. Changes to the document are only remembered, and
+  when the composition ends its result is reported moved over each of them (`rebaseEdit`), so it
+  lands where the user typed and not at an offset others' edits shifted. If the composed text
+  replaced text that others changed meanwhile, only the inserted text is kept, after the other
+  change. A composition that changed nothing just catches the textarea up.
+- The textarea has no `defaultValue`: React assigns it to the DOM node and, for a textarea whose
+  text has not been edited, that can replace the text without the binding noticing. The first text is
+  set in a layout effect instead.
+
+**Tests.** The logic above is tested without React or a browser through `FakeTextarea`
+(`lib/test-support.ts`, which models the rule that setting `value` moves the caret to the end) and
+`FakeNetwork` (`lib/test-network.ts`, the protocol's real `Room` behind fake sockets, with timers the
+test advances by hand), including property tests over random sessions of typing, remote edits and
+compositions. The components (`NoteTextArea`, `NoteCard`, `BoardPage`, `HomePage`, `App`) are tested
+with React and jsdom through `test-render.ts`.
+
+**Not yet:** nothing is stored in the browser, so operations made offline are lost if the page is
+closed before the connection returns, and a reload takes the whole board from the server again.
+Presence (cursors, selections) is in the protocol but not shown. There is no undo, no keyboard
+shortcuts for notes and no touch-specific design beyond pointer events. Concurrent edits of the
+same word by two people merge as the sequence CRDT dictates, which can read oddly, and the caret is
+not shown to the other person.
+
 ## Offline-first approach
 
 - **The local replica is the source of truth.** The UI reads and writes the local CRDT state
@@ -499,7 +581,8 @@ and the server holds a board's whole log in memory while it is open.
   cover. After a disconnect nothing is resent blindly (see "Sync protocol"). **[logic implemented]**
 - **Reconnect.** The client reconnects with capped exponential backoff and jitter and opens with
   `hello`; the vectors decide what is sent. Going offline is a normal state, not an error.
-  **[planned: the client wiring]**
+  **[implemented in `SyncConnection`; operations made offline are lost if the page is closed
+  before reconnecting, until durable storage exists]**
 - **Merge on reconnect.** Remote operations are applied to the local replica with the same
   functions used for local edits, so offline edits made by several people converge without a manual
   merge step.

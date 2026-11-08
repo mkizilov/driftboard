@@ -70,9 +70,7 @@ describe('createPresence', () => {
   it('sends who this is, at once, when the connection comes online', () => {
     const { link, identity } = setup();
     link.set('online');
-    expect(link.sent).toEqual([
-      { cursor: null, editing: null, ...identity.getIdentity() },
-    ]);
+    expect(link.sent).toEqual([{ cursor: null, editing: null, ...identity.getIdentity() }]);
   });
 
   it('sends at once if the connection was already online', () => {

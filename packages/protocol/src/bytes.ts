@@ -39,7 +39,7 @@ export class ByteWriter {
     this.#reserve(8);
     let rest = value;
     while (rest >= 0x80) {
-      this.#bytes[this.#length] = (rest % 0x80) | 0x80;
+      this.#bytes[this.#length] = rest % 0x80 | 0x80;
       this.#length += 1;
       rest = Math.floor(rest / 0x80);
     }

@@ -45,7 +45,15 @@ interface Inner<T> extends Counts {
 type Node<T> = Leaf<T> | Inner<T>;
 
 function newLeaf<T>(items: T[]): Leaf<T> {
-  return { kind: 'leaf', parent: null, items, next: null, count: items.length, shown: 0, text: null };
+  return {
+    kind: 'leaf',
+    parent: null,
+    items,
+    next: null,
+    count: items.length,
+    shown: 0,
+    text: null,
+  };
 }
 
 function newInner<T>(children: Node<T>[]): Inner<T> {
@@ -222,7 +230,9 @@ export class OrderTree<T extends OrderItem> {
         }
       }
       if (node.count !== total || node.shown !== shown) {
-        throw new Error(`Invariant violated: counts ${node.count}/${node.shown}, not ${total}/${shown}`);
+        throw new Error(
+          `Invariant violated: counts ${node.count}/${node.shown}, not ${total}/${shown}`,
+        );
       }
       return { count: total, shown };
     };
@@ -272,11 +282,7 @@ export class OrderTree<T extends OrderItem> {
    * The child of `inner` that holds the item `index` places in (counting by `weigh`: all nodes or
    * shown ones), and the place of that item among the child's own.
    */
-  #descend(
-    inner: Inner<T>,
-    index: number,
-    weigh: (child: Node<T>) => number,
-  ): [Node<T>, number] {
+  #descend(inner: Inner<T>, index: number, weigh: (child: Node<T>) => number): [Node<T>, number] {
     let rest = index;
     for (const child of inner.children) {
       const weight = weigh(child);

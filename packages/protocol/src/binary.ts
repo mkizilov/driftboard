@@ -349,7 +349,12 @@ class Encoder {
     return FIELDS.every((name, index) => {
       const field = (fields as Body)[name];
       const old = before[index];
-      if (typeof field !== 'object' || field === null || Array.isArray(field) || old === undefined) {
+      if (
+        typeof field !== 'object' ||
+        field === null ||
+        Array.isArray(field) ||
+        old === undefined
+      ) {
         return false;
       }
       const register = field as Body;
@@ -387,7 +392,10 @@ class Encoder {
       const key = stringOf(op, 'id');
       if (key !== `${id.counter + characters.length}@${id.replica}`) break;
       if (paired) {
-        expected = expected && { counter: expected.counter + 1, supersedes: `${expected.counter}@${origin}` };
+        expected = expected && {
+          counter: expected.counter + 1,
+          supersedes: `${expected.counter}@${origin}`,
+        };
         if (next + 1 >= end || !this.#isReassert(ops[next + 1]?.op, origin, note, expected)) break;
       }
       characters.push(codePointOf(stringOf(op, 'value')));
@@ -441,7 +449,10 @@ class Encoder {
       if (following.replica !== target.replica || (difference !== 1 && difference !== -1)) break;
       if (step !== 0 && difference !== step) break;
       if (paired) {
-        expected = expected && { counter: expected.counter + 1, supersedes: `${expected.counter}@${origin}` };
+        expected = expected && {
+          counter: expected.counter + 1,
+          supersedes: `${expected.counter}@${origin}`,
+        };
         if (next + 1 >= end || !this.#isReassert(ops[next + 1]?.op, origin, note, expected)) break;
       }
       if (step === 0) step = difference;
@@ -631,12 +642,14 @@ class Decoder {
     let parent: string | null;
     switch (flags & 3) {
       case 0:
-        if (side === 'left') throw new BinaryFormatError('The start of the text has no left children');
+        if (side === 'left')
+          throw new BinaryFormatError('The start of the text has no left children');
         parent = null;
         break;
       case 1: {
         const delta = reader.varint();
-        if (delta < 1 || delta >= id.counter) throw new BinaryFormatError('A parent is out of range');
+        if (delta < 1 || delta >= id.counter)
+          throw new BinaryFormatError('A parent is out of range');
         parent = `${id.counter - delta}@${id.replica}`;
         break;
       }
@@ -718,7 +731,8 @@ class Decoder {
     FIELDS.forEach((name, index) => {
       if ((same & (1 << index)) !== 0) {
         const old = before?.[index];
-        if (old === undefined) throw new BinaryFormatError(`Field ${name} repeats a put that is not there`);
+        if (old === undefined)
+          throw new BinaryFormatError(`Field ${name} repeats a put that is not there`);
         fields.push(old);
         return;
       }

@@ -21,7 +21,8 @@ export async function pollUntil<T>(
   for (;;) {
     const value = await read();
     if (value !== undefined) return value;
-    if (Date.now() >= deadline) throw new Error(`Gave up waiting for ${what} after ${timeoutMs} ms`);
+    if (Date.now() >= deadline)
+      throw new Error(`Gave up waiting for ${what} after ${timeoutMs} ms`);
     await sleep(intervalMs);
   }
 }

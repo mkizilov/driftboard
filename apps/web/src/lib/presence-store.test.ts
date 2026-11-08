@@ -508,13 +508,20 @@ describe('PresenceStore: against a model', () => {
             if (timers.now - seen >= PEER_TIMEOUT_MS) model.delete(who);
           }
           const expected = [...model.entries()]
-            .map(([id, { state: { name, color, cursor, editing } }]) => ({
-              id,
-              name,
-              color,
-              cursor,
-              editing,
-            }))
+            .map(
+              ([
+                id,
+                {
+                  state: { name, color, cursor, editing },
+                },
+              ]) => ({
+                id,
+                name,
+                color,
+                cursor,
+                editing,
+              }),
+            )
             .sort((a, b) => a.name.localeCompare(b.name) || (a.id < b.id ? -1 : 1));
           if (JSON.stringify(store.getPeers()) !== JSON.stringify(expected)) return false;
           // The notes agree with the people.
@@ -523,7 +530,7 @@ describe('PresenceStore: against a model', () => {
             const shown = store.getEditors(note).map((editor) => editor.id);
             if (JSON.stringify(shown) !== JSON.stringify(editing)) return false;
           }
-          if ((timers.delays.length > 0) !== (model.size > 0)) return false;
+          if (timers.delays.length > 0 !== model.size > 0) return false;
         }
         return true;
       }),

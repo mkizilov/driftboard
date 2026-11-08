@@ -53,7 +53,13 @@ describe('createRng', () => {
     const rng = createRng(5);
     const counts = { often: 0, rarely: 0, never: 0 };
     for (let index = 0; index < 10_000; index += 1) {
-      counts[rng.weighted([['often', 9], ['rarely', 1], ['never', 0]] as const)] += 1;
+      counts[
+        rng.weighted([
+          ['often', 9],
+          ['rarely', 1],
+          ['never', 0],
+        ] as const)
+      ] += 1;
     }
     expect(counts.never).toBe(0);
     expect(counts.often).toBeGreaterThan(8700);
@@ -65,7 +71,12 @@ describe('createRng', () => {
     const rng = createRng(6);
     expect(() => rng.weighted([])).toThrow(RangeError);
     expect(() => rng.weighted([['a', 0]])).toThrow(RangeError);
-    expect(() => rng.weighted([['a', -1], ['b', 3]])).toThrow(RangeError);
+    expect(() =>
+      rng.weighted([
+        ['a', -1],
+        ['b', 3],
+      ]),
+    ).toThrow(RangeError);
   });
 });
 

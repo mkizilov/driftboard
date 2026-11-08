@@ -178,7 +178,7 @@ describe('the handshake', () => {
     expect(sizes).toEqual([MAX_OPS_PER_MESSAGE, MAX_OPS_PER_MESSAGE, 200]);
   });
 
-  it('brings back a replica\'s own operations after it lost its data, and numbers on from them', () => {
+  it("brings back a replica's own operations after it lost its data, and numbers on from them", () => {
     const pair = synced(emptyStore, storeOf(stamped(c, 1, 3)));
     expect(pair.client.applied.map(label)).toEqual(['c1', 'c2', 'c3']);
     const next = authorOps(pair.client.store, c, newBoard(c).createNote().ops);
@@ -316,7 +316,7 @@ describe('protocol violations close the session with an error', () => {
 });
 
 describe('presence', () => {
-  it('passes a client\'s presence up, and a relayed one down to a client', () => {
+  it("passes a client's presence up, and a relayed one down to a client", () => {
     const pair = synced(emptyStore, emptyStore);
     const mine: Message = {
       type: 'presence',

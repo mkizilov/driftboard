@@ -23,7 +23,6 @@ import {
 } from './text-scenarios';
 import { churn, compacted } from './tombstone-scenarios';
 
-
 // The benchmarks run these scenarios at a size that takes seconds. Here they run small, to show
 // that they do what the numbers claim: valid edits, the text they should leave, every replica and
 // every wire format ending up in the same place.

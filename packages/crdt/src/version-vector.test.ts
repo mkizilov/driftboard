@@ -120,7 +120,12 @@ describe('VersionVector.merge laws', () => {
   it('is associative', () => {
     fc.assert(
       fc.property(versionVectorArb, versionVectorArb, versionVectorArb, (x, y, z) => {
-        expect(x.merge(y).merge(z).equals(x.merge(y.merge(z)))).toBe(true);
+        expect(
+          x
+            .merge(y)
+            .merge(z)
+            .equals(x.merge(y.merge(z))),
+        ).toBe(true);
       }),
     );
   });
@@ -177,9 +182,11 @@ describe('VersionVector.advance properties', () => {
   it('is commutative and idempotent over a set of ops', () => {
     fc.assert(
       fc.property(
-        fc.array(opIdArb, { maxLength: 10 }).chain((ops) =>
-          fc.tuple(fc.constant(ops), fc.shuffledSubarray(ops, { minLength: ops.length })),
-        ),
+        fc
+          .array(opIdArb, { maxLength: 10 })
+          .chain((ops) =>
+            fc.tuple(fc.constant(ops), fc.shuffledSubarray(ops, { minLength: ops.length })),
+          ),
         ([ops, shuffled]) => {
           const fold = (list: typeof ops) =>
             list.reduce((acc, op) => acc.advance(op), VersionVector.empty);

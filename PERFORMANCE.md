@@ -26,20 +26,20 @@ garbage-collect tombstones. The benchmarks are in `bench/` (`pnpm bench` runs th
 
 ## Summary
 
-| | before | after |
-| --- | ---: | ---: |
-| **100,000 text operations performed locally** (an index to a character on every edit) | **264,168 ms** | **76 ms** |
-| the same, 40,000 / 20,000 / 10,000 operations | 19,818 / 3,832 / 951 ms | 32 / 20 / 11 ms |
-| 10,000 edits, the whole text read after each (an editor) | 1,407 ms | 37 ms |
-| read the text once, after 100,000 operations | 10.3 ms | 4.0 ms |
-| 100,000 operations applied by another replica, in order | 90 ms | 75 ms |
-| the same, in random order (causal buffer) | 140 ms | 129 ms |
-| heap of one replica, 83,944 nodes | 26.6 MB | 27.8 MB |
-| **load a board of 1,000 notes, 800 typed characters each** (842,485 operations), from JSON | 1,819 ms | 1,847 ms |
-| the same, from the binary encoding | n/a | 1,507 ms |
-| **sync after 50,000 offline operations** (120,009 moved), bytes on the wire | 17,649 KB | 437 KB |
-| the same, time to be in sync | 330 ms | 311 ms |
-| whole benchmark process | 295 s | 10 s |
+|                                                                                            |                  before |           after |
+| ------------------------------------------------------------------------------------------ | ----------------------: | --------------: |
+| **100,000 text operations performed locally** (an index to a character on every edit)      |          **264,168 ms** |       **76 ms** |
+| the same, 40,000 / 20,000 / 10,000 operations                                              | 19,818 / 3,832 / 951 ms | 32 / 20 / 11 ms |
+| 10,000 edits, the whole text read after each (an editor)                                   |                1,407 ms |           37 ms |
+| read the text once, after 100,000 operations                                               |                 10.3 ms |          4.0 ms |
+| 100,000 operations applied by another replica, in order                                    |                   90 ms |           75 ms |
+| the same, in random order (causal buffer)                                                  |                  140 ms |          129 ms |
+| heap of one replica, 83,944 nodes                                                          |                 26.6 MB |         27.8 MB |
+| **load a board of 1,000 notes, 800 typed characters each** (842,485 operations), from JSON |                1,819 ms |        1,847 ms |
+| the same, from the binary encoding                                                         |                     n/a |        1,507 ms |
+| **sync after 50,000 offline operations** (120,009 moved), bytes on the wire                |               17,649 KB |          437 KB |
+| the same, time to be in sync                                                               |                  330 ms |          311 ms |
+| whole benchmark process                                                                    |                   295 s |            10 s |
 
 The sequence went from quadratic to logarithmic per edit. Loading and syncing are not limited by it
 (below), so their times did not move; what moved there is size.
@@ -49,15 +49,15 @@ The sequence went from quadratic to logarithmic per edit. Loading and syncing ar
 A person typing: 78% inserts at the caret, 12% backspaces, 3% forward deletes, and about 7% of the
 time a jump of the caret to somewhere else (`editScript`). Operations are counted per character.
 
-| scenario | before | per operation | after | per operation |
-| --- | ---: | ---: | ---: | ---: |
-| local edits, 10,000 | 951 ms | 95.1 µs | 11 ms | 1.1 µs |
-| local edits, 20,000 | 3,832 ms | 191.6 µs | 20 ms | 1.0 µs |
-| local edits, 40,000 | 19,818 ms | 495.5 µs | 32 ms | 0.8 µs |
-| local edits, 100,000 | 264,168 ms | 2,641.7 µs | 76 ms | 0.8 µs |
-| apply 100,000 on a fresh replica, in order | 90 ms | 0.9 µs | 75 ms | 0.7 µs |
-| apply 100,000 on a fresh replica, random order | 140 ms | 1.4 µs | 129 ms | 1.3 µs |
-| 10,000 edits, text read after each | 1,407 ms | 140.7 µs | 37 ms | 3.7 µs |
+| scenario                                       |     before | per operation |  after | per operation |
+| ---------------------------------------------- | ---------: | ------------: | -----: | ------------: |
+| local edits, 10,000                            |     951 ms |       95.1 µs |  11 ms |        1.1 µs |
+| local edits, 20,000                            |   3,832 ms |      191.6 µs |  20 ms |        1.0 µs |
+| local edits, 40,000                            |  19,818 ms |      495.5 µs |  32 ms |        0.8 µs |
+| local edits, 100,000                           | 264,168 ms |    2,641.7 µs |  76 ms |        0.8 µs |
+| apply 100,000 on a fresh replica, in order     |      90 ms |        0.9 µs |  75 ms |        0.7 µs |
+| apply 100,000 on a fresh replica, random order |     140 ms |        1.4 µs | 129 ms |        1.3 µs |
+| 10,000 edits, text read after each             |   1,407 ms |      140.7 µs |  37 ms |        3.7 µs |
 
 **Why it was slow.** `TextSequence` needed, on every edit, the character at an index and the node
 after a node. Both came from two arrays of the whole document in order, and any change marked them
@@ -97,13 +97,13 @@ typing starts or ends, concurrently, pays for walking that run once. Local typin
 followed by a few characters erased: 842,485 operations, 783,197 characters shown, the log that a
 server stores and a client loads.
 
-| step | before (JSON) | after (JSON) | after (binary) |
-| --- | ---: | ---: | ---: |
-| parse and check the operations | 661 ms | 673 ms | 397 ms |
-| apply them to a new board | 1,088 ms | 1,133 ms | 1,074 ms |
-| read every note, as the screen does | 70 ms | 41 ms | 36 ms |
-| **load in all** | **1,819 ms** | **1,847 ms** | **1,507 ms** |
-| write the operations | n/a | 327 ms | 100 ms |
+| step                                | before (JSON) | after (JSON) | after (binary) |
+| ----------------------------------- | ------------: | -----------: | -------------: |
+| parse and check the operations      |        661 ms |       673 ms |         397 ms |
+| apply them to a new board           |      1,088 ms |     1,133 ms |       1,074 ms |
+| read every note, as the screen does |         70 ms |        41 ms |          36 ms |
+| **load in all**                     |  **1,819 ms** | **1,847 ms** |   **1,507 ms** |
+| write the operations                |           n/a |       327 ms |         100 ms |
 
 Heap held by the loaded board: 300 MB before (one board); after, the JSON and binary loads together
 held 611 MB (two boards, measured together), so roughly the same per board.
@@ -126,10 +126,10 @@ offline client reconnects, receives what it missed, sends what it did, the serve
 and the other client applies that, until everything is quiet and both boards are equal. 484 messages
 of at most 500 operations, 120,009 operations moved in all.
 
-| wire format | messages | bytes on the wire | time to be in sync |
-| --- | ---: | ---: | ---: |
-| JSON text | 484 | 17,649 KB | 314 ms |
-| binary operations | 484 | 437 KB | 311 ms |
+| wire format       | messages | bytes on the wire | time to be in sync |
+| ----------------- | -------: | ----------------: | -----------------: |
+| JSON text         |      484 |         17,649 KB |             314 ms |
+| binary operations |      484 |            437 KB |             311 ms |
 
 Time is the same because it is spent on checking and applying 120,009 operations, not on parsing
 them (I did not profile it further). Bytes are 40 times fewer. On a link this would matter, but no link was involved here: for
@@ -145,12 +145,12 @@ consecutive counters (up or down), a text edit's re-assertion of its note folded
 typing a key at a time is a run of pairs, and a put that writes only the fields that changed. The
 decoder returns exactly the operations it was given, key order included.
 
-| workload | operations | JSON | binary | smaller by | JSON gzipped | binary gzipped |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| one person typing 20,000 keys, a key at a time | 40,001 | 9,481 KB | 348 KB | 27.2× | 406 KB | 109 KB |
-| the board of section 2 | 842,485 | 128,629 KB | 1,100 KB | 116.9× | 9,308 KB | 724 KB |
-| the sync of section 3, on the wire | 120,009 | 17,649 KB | 437 KB | 40.4× | | |
-| one keystroke on its own, as a message | 2 | 502 B | 61 B | 8.2× | | |
+| workload                                       | operations |       JSON |   binary | smaller by | JSON gzipped | binary gzipped |
+| ---------------------------------------------- | ---------: | ---------: | -------: | ---------: | -----------: | -------------: |
+| one person typing 20,000 keys, a key at a time |     40,001 |   9,481 KB |   348 KB |      27.2× |       406 KB |         109 KB |
+| the board of section 2                         |    842,485 | 128,629 KB | 1,100 KB |     116.9× |     9,308 KB |         724 KB |
+| the sync of section 3, on the wire             |    120,009 |  17,649 KB |   437 KB |      40.4× |              |                |
+| one keystroke on its own, as a message         |          2 |      502 B |     61 B |       8.2× |              |                |
 
 (JSON is the stamped operations as the system moves them, `{origin, seq, op}`; the log file
 `serializeBoardOps` writes is smaller, 97,473 KB for the board.) Reading it: a run of typed
@@ -159,8 +159,7 @@ sessions of 10 to 80, shrinks 117 times; a person who types a key at a time with
 about breaks runs every few keys: 18 bytes a key, 27 times. Gzip finds much of what the encoding
 removes, and not all: binary and then gzip is still 3.7 times smaller than gzipped JSON for the
 typing and 12.9 times for the board. A message of one keystroke has no earlier message to lean on
-(the format has no memory between messages), so the put in it is written whole: 61 bytes instead of
-502.
+(the format has no memory between messages), so the put in it is written whole: 61 bytes instead of 502.
 
 **Where it is used.** Protocol version 3: `ops` messages are binary WebSocket frames
 (`encodeFrame`, `parseFrame`; control messages stay JSON text); the server hub and the web
@@ -188,13 +187,13 @@ concurrent edits find their place.
 **Growth.** One note of 1,000 characters, edited 100,000 times by selecting one to five characters and
 typing as many over them (the text never grows):
 
-| edits | shown | nodes held | tombstones | heap of the sequence | time for these edits | per edit |
-| --- | ---: | ---: | ---: | ---: | ---: | ---: |
-| 0 | 1,000 | 1,000 | 0.0% | 0.0 MB | | |
-| 25,000 | 1,000 | 75,904 | 98.7% | 35.0 MB | 87 ms | 3.5 µs |
-| 50,000 | 1,000 | 151,062 | 99.3% | 69.9 MB | 123 ms | 4.9 µs |
-| 75,000 | 1,000 | 226,352 | 99.6% | 101.5 MB | 127 ms | 5.1 µs |
-| 100,000 | 1,000 | 301,153 | 99.7% | 139.9 MB | 181 ms | 7.3 µs |
+| edits   | shown | nodes held | tombstones | heap of the sequence | time for these edits | per edit |
+| ------- | ----: | ---------: | ---------: | -------------------: | -------------------: | -------: |
+| 0       | 1,000 |      1,000 |       0.0% |               0.0 MB |                      |          |
+| 25,000  | 1,000 |     75,904 |      98.7% |              35.0 MB |                87 ms |   3.5 µs |
+| 50,000  | 1,000 |    151,062 |      99.3% |              69.9 MB |               123 ms |   4.9 µs |
+| 75,000  | 1,000 |    226,352 |      99.6% |             101.5 MB |               127 ms |   5.1 µs |
+| 100,000 | 1,000 |    301,153 |      99.7% |             139.9 MB |               181 ms |   7.3 µs |
 
 The same text with its tombstones dropped: 1,000 nodes, 0.45 MB. So:
 
@@ -215,7 +214,7 @@ The same text with its tombstones dropped: 1,000 nodes, 0.45 MB. So:
 target of any `delete` that has not been applied yet (a delete whose target is missing waits in the
 causal buffer for it). (3) An anchor for operations of replicas that have not seen the delete, who
 made inserts next to it. (4) An anchor for new local inserts: inserting after a character that has
-right children makes the new character the *left child of the next node in document order*, which
+right children makes the new character the _left child of the next node in document order_, which
 can be a tombstone, so replicas that did see the delete go on writing operations whose parent is T.
 (5) The anchor of undo: `insertTextAfter` types after a character that may be deleted.
 
@@ -228,7 +227,7 @@ can be a tombstone, so replicas that did see the delete go on writing operations
 2. **"All those replicas" is a set that is known and bounded.** That is the hard part, and the reason
    it is not done. Replica ids are fresh on every page load (`session.ts`), there is no registry of
    devices, and a phone that was offline for a month comes back with operations next to T. Either a
-   replica that has been away longer than a lease (say 30 days) is *evicted*: it must reload the
+   replica that has been away longer than a lease (say 30 days) is _evicted_: it must reload the
    board from a snapshot, and its unsynced operations are replayed as a diff against the new text
    instead of being merged, which loses their fine intent; or every device registers and the server
    waits for each to acknowledge, a dead one holding the garbage forever.

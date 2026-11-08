@@ -28,7 +28,8 @@ describe('planMonkey', () => {
 
   it('is mostly typing, and typing is the most common thing', () => {
     const counts = new Map<MonkeyKind, number>();
-    for (const step of planMonkey(5, 5000, 3)) counts.set(step.kind, (counts.get(step.kind) ?? 0) + 1);
+    for (const step of planMonkey(5, 5000, 3))
+      counts.set(step.kind, (counts.get(step.kind) ?? 0) + 1);
     const typing = counts.get('type') ?? 0;
     expect(typing).toBeGreaterThan(5000 * 0.2);
     for (const [kind, count] of counts) if (kind !== 'type') expect(count).toBeLessThan(typing);
@@ -87,7 +88,9 @@ describe('planMonkey', () => {
   });
 
   it('types text that includes characters outside ASCII, and outside the basic plane', () => {
-    const typed = planMonkey(3, 3000, 3).flatMap((step) => (step.kind === 'type' ? [step.text] : []));
+    const typed = planMonkey(3, 3000, 3).flatMap((step) =>
+      step.kind === 'type' ? [step.text] : [],
+    );
     expect(typed.some((text) => text.includes('é'))).toBe(true);
     expect(typed.some((text) => text.includes('😀'))).toBe(true);
     expect(typed.some((text) => text.includes(' '))).toBe(true);

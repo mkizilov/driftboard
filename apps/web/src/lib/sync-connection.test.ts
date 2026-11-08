@@ -378,9 +378,9 @@ describe('SyncConnection: a server that misbehaves', () => {
     expect(b.board.getNote(id)).toMatchObject({ x: 3, y: 4 });
     // What the server relayed to B was a binary frame, and B read it.
     expect(socketB.received.some((frame) => typeof frame !== 'string')).toBe(true);
-    expect(net.sockets.some((socket) => socket.sent.some((frame) => typeof frame !== 'string'))).toBe(
-      true,
-    );
+    expect(
+      net.sockets.some((socket) => socket.sent.some((frame) => typeof frame !== 'string')),
+    ).toBe(true);
   });
 
   it('reports the reason when the server turns the client away', () => {
@@ -869,9 +869,7 @@ describe('SyncConnection: presence', () => {
     harness.online(a);
     harness.online(b);
     a.connection.sendPresence(here('A'));
-    expect(b.heard).toEqual([
-      { type: 'presence', replicaId: a.board.replicaId, state: here('A') },
-    ]);
+    expect(b.heard).toEqual([{ type: 'presence', replicaId: a.board.replicaId, state: here('A') }]);
     expect(a.heard).toEqual([]);
   });
 

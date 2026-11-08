@@ -29,11 +29,14 @@ const server = createServer((request, response) => {
   }
 });
 
-setTimeout(() => {
-  server.listen(port, process.env['DRIFTBOARD_HOST'], () => {
-    console.log(`stub listening on ${port} (start ${starts})`);
-  });
-}, Number(process.env['STUB_SLOW_START_MS'] ?? 0));
+setTimeout(
+  () => {
+    server.listen(port, process.env['DRIFTBOARD_HOST'], () => {
+      console.log(`stub listening on ${port} (start ${starts})`);
+    });
+  },
+  Number(process.env['STUB_SLOW_START_MS'] ?? 0),
+);
 
 process.on('SIGTERM', () => {
   if (process.env['STUB_IGNORE_TERM'] === '1') return;

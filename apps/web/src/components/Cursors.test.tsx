@@ -39,9 +39,7 @@ describe('Cursors', () => {
     flush(() => {
       people.hear('Ada', { cursor: { x: 100, y: 50 } });
     });
-    const screen = render(
-      <Cursors store={people.store} viewport={{ x: 20, y: -10, scale: 2 }} />,
-    );
+    const screen = render(<Cursors store={people.store} viewport={{ x: 20, y: -10, scale: 2 }} />);
     // 100 * 2 + 20 and 50 * 2 - 10.
     expect(must(cursors(screen.container)[0]).style.transform).toBe('translate(220px, 90px)');
 

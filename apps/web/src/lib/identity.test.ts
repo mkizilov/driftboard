@@ -10,7 +10,10 @@ import {
   type KeyValueStore,
 } from './identity';
 
-const bytes = (...values: number[]) => () => Uint8Array.from(values);
+const bytes =
+  (...values: number[]) =>
+  () =>
+    Uint8Array.from(values);
 
 /** A `localStorage` that remembers what it is given. */
 function memory(initial: Record<string, string> = {}) {
@@ -149,7 +152,7 @@ describe('IdentityStore', () => {
     });
     expect(store.rename('  Ada   L  ')).toBe(true);
     expect(store.getIdentity().name).toBe('Ada L');
-    expect(JSON.parse(data.get(IDENTITY_KEY) ?? 'null').name).toBe('Ada L');
+    expect((JSON.parse(data.get(IDENTITY_KEY) ?? 'null') as { name: string }).name).toBe('Ada L');
     expect(calls).toBe(1);
   });
 

@@ -41,7 +41,9 @@ export function encodeSnapshot(ops: readonly StampedOp[]): Buffer {
     if (group === undefined) byOrigin.set(op.origin, [op]);
     else group.push(op);
   }
-  const ordered = [...byOrigin].sort(([a], [b]) => compareReplicaIds(a, b)).flatMap(([, group]) => group);
+  const ordered = [...byOrigin]
+    .sort(([a], [b]) => compareReplicaIds(a, b))
+    .flatMap(([, group]) => group);
   return gzipSync(encodeOps(ordered));
 }
 

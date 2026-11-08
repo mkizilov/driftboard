@@ -147,18 +147,17 @@ export class Person implements Actor {
 
   /** Every note as this person sees it, in order of id. */
   async readBoard(): Promise<BoardNote[]> {
-    const raw = await this.page.locator('[data-note-id]').evaluateAll(
-      (notes): RawNote[] =>
-        notes.map((note) => {
-          const area = note.querySelector('textarea');
-          return {
-            id: note.getAttribute('data-note-id') ?? '',
-            transform: note.style.transform,
-            color: note.getAttribute('data-color') ?? '',
-            zIndex: note.style.zIndex,
-            text: area === null ? '' : area.value,
-          };
-        }),
+    const raw = await this.page.locator('[data-note-id]').evaluateAll((notes): RawNote[] =>
+      notes.map((note) => {
+        const area = note.querySelector('textarea');
+        return {
+          id: note.getAttribute('data-note-id') ?? '',
+          transform: note.style.transform,
+          color: note.getAttribute('data-color') ?? '',
+          zIndex: note.style.zIndex,
+          text: area === null ? '' : area.value,
+        };
+      }),
     );
     return parseBoard(raw);
   }

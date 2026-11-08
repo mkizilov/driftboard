@@ -65,6 +65,11 @@ export default tseslint.config(
     rules: reactHooks.configs.recommended.rules,
   },
   {
+    // Plain Node scripts: no type information, so the Node globals they use are declared here.
+    files: ['apps/web/scripts/**/*.mjs', 'e2e/support/test-fixtures/**/*.mjs'],
+    languageOptions: { globals: { Buffer: 'readonly', setTimeout: 'readonly' } },
+  },
+  {
     // Playwright fixtures take what they depend on as a destructured first parameter, which is
     // empty for a fixture that depends on nothing.
     files: ['e2e/**/*.ts'],

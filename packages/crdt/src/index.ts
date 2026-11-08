@@ -1,11 +1,5 @@
 export { AwMap, CausalOrderError } from './aw-map';
-export type {
-  AwMapDotEntry,
-  AwMapJoin,
-  AwMapOp,
-  AwMapPutOp,
-  AwMapRemoveOp,
-} from './aw-map';
+export type { AwMapDotEntry, AwMapJoin, AwMapOp, AwMapPutOp, AwMapRemoveOp } from './aw-map';
 export { Board } from './board';
 export type { BoardOptions, NoteInit } from './board';
 export {
@@ -44,12 +38,6 @@ export type { Ordering } from './ordering';
 export { compareReplicaIds, generateReplicaId, isReplicaId, replicaId } from './replica-id';
 export type { ReplicaId } from './replica-id';
 export { TextSequence } from './text-sequence';
-export type {
-  TextDeleteOp,
-  TextInsertOp,
-  TextNode,
-  TextOp,
-  TextSide,
-} from './text-sequence';
+export type { TextDeleteOp, TextInsertOp, TextNode, TextOp, TextSide } from './text-sequence';
 export { VersionVector } from './version-vector';
 export type { VersionVectorOrder } from './version-vector';

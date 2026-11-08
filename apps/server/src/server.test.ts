@@ -113,7 +113,8 @@ class TestClient {
     this.socket = socket;
     this.closeCode = null;
     socket.on('message', (data, isBinary) => {
-      this.#onMessage(socket, isBinary ? new Uint8Array(data as Buffer) : data.toString());
+      const bytes = data as Buffer;
+      this.#onMessage(socket, isBinary ? new Uint8Array(bytes) : bytes.toString('utf8'));
     });
     socket.on('close', (code) => {
       if (this.socket !== socket) return;
@@ -191,7 +192,8 @@ class RawSocket {
     this.socket = socket;
     this.closed = new Promise<number>((resolve) => socket.once('close', (code) => resolve(code)));
     socket.on('message', (data, isBinary) => {
-      const parsed = parseFrame(isBinary ? new Uint8Array(data as Buffer) : data.toString());
+      const bytes = data as Buffer;
+      const parsed = parseFrame(isBinary ? new Uint8Array(bytes) : bytes.toString('utf8'));
       if (parsed.ok) this.messages.push(parsed.message);
     });
     socket.on('error', () => undefined);

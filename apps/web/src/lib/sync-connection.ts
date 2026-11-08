@@ -281,7 +281,11 @@ export class SyncConnection {
 
   #onMessage(data: unknown): void {
     if (this.#session === null) return;
-    if (typeof data !== 'string' && !(data instanceof ArrayBuffer) && !(data instanceof Uint8Array)) {
+    if (
+      typeof data !== 'string' &&
+      !(data instanceof ArrayBuffer) &&
+      !(data instanceof Uint8Array)
+    ) {
       this.#fail('the server sent a message that is neither text nor bytes');
       return;
     }

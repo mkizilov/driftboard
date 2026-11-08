@@ -482,7 +482,12 @@ describe('undoing a note deletion', () => {
     tell(a, [...other.ops, ...b.type(other.id, 0, 'theirs')]);
     tell(b, a.history.deleteNote(id));
     tell(b, a.history.undo());
-    expect(a.board.notes().map((note) => note.text).sort()).toEqual(['keep me', 'theirs']);
+    expect(
+      a.board
+        .notes()
+        .map((note) => note.text)
+        .sort(),
+    ).toEqual(['keep me', 'theirs']);
     expectConverged(a, b);
   });
 
@@ -518,7 +523,12 @@ describe('undoing a note deletion', () => {
     a.history.undo();
     expect(a.board.notes().map((note) => note.id)).toEqual([second]);
     a.history.undo();
-    expect(a.board.notes().map((note) => note.id).sort()).toEqual([first, second].sort());
+    expect(
+      a.board
+        .notes()
+        .map((note) => note.id)
+        .sort(),
+    ).toEqual([first, second].sort());
     expect(a.history.redo().length).toBeGreaterThan(0);
     expect(a.board.notes().map((note) => note.id)).toEqual([second]);
   });

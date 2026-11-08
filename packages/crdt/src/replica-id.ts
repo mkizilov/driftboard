@@ -31,7 +31,9 @@ export function compareReplicaIds(a: ReplicaId, b: ReplicaId): Ordering {
 export function generateReplicaId(randomBytes: (length: number) => Uint8Array): ReplicaId {
   const bytes = randomBytes(GENERATED_ID_BYTES);
   if (bytes.length !== GENERATED_ID_BYTES) {
-    throw new RangeError(`randomBytes must return ${GENERATED_ID_BYTES} bytes, got ${bytes.length}`);
+    throw new RangeError(
+      `randomBytes must return ${GENERATED_ID_BYTES} bytes, got ${bytes.length}`,
+    );
   }
   let hex = '';
   for (const byte of bytes) hex += byte.toString(16).padStart(2, '0');

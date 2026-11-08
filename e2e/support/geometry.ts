@@ -68,7 +68,8 @@ export function freeSpot(
     const fy = (start.fy + attempt * 0.618034) % 1;
     const point = { x: Math.round(left + fx * width), y: Math.round(top + fy * height) };
     const underControls =
-      point.x >= canvas.width - ZOOM_CONTROLS.width && point.y >= canvas.height - ZOOM_CONTROLS.height;
+      point.x >= canvas.width - ZOOM_CONTROLS.width &&
+      point.y >= canvas.height - ZOOM_CONTROLS.height;
     if (!underControls && !notes.some((note) => overNote(note, point))) return point;
   }
   return null;

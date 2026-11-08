@@ -77,7 +77,9 @@ describe('freeSpot', () => {
 
   it('stays out of the zoom buttons in the corner', () => {
     const spot = freeSpot([], canvas, { fx: 1 - 1e-9, fy: 1 - 1e-9 });
-    expect(spot === null || !(spot.x >= canvas.width - 190 && spot.y >= canvas.height - 70)).toBe(true);
+    expect(spot === null || !(spot.x >= canvas.width - 190 && spot.y >= canvas.height - 70)).toBe(
+      true,
+    );
   });
 });
 

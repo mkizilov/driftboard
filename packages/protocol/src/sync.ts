@@ -118,10 +118,7 @@ export function authorOps(
 }
 
 /** Sends the peer every operation in the store that it is not known to hold. */
-export function flush(
-  session: Session,
-  store: OpStore,
-): { session: Session; send: Message[] } {
+export function flush(session: Session, store: OpStore): { session: Session; send: Message[] } {
   if (session.phase !== 'ready') return { session, send: [] };
   const missing = storeMissing(store, session.sent);
   if (missing.length === 0) return { session, send: [] };

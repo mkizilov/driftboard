@@ -9,14 +9,14 @@ repository today, **[planned]** is designed here but not yet implemented.
 
 ## Packages
 
-| Path                | Role                                                                     | Status      |
-| ------------------- | ------------------------------------------------------------------------ | ----------- |
-| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks.   | implemented |
-| `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.                | implemented |
-| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.    | implemented |
-| `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.          | implemented |
-| `e2e`               | Playwright end-to-end suite: real server and build, several browsers.   | implemented |
-| `bench`             | Benchmarks and the report behind `PERFORMANCE.md`.                       | implemented |
+| Path                | Role                                                                   | Status      |
+| ------------------- | ---------------------------------------------------------------------- | ----------- |
+| `packages/crdt`     | Pure CRDT library. Zero runtime dependencies, no I/O, injected clocks. | implemented |
+| `packages/protocol` | Sync messages (zod) and the sync logic as pure functions.              | implemented |
+| `apps/server`       | Node 22 sync server: `ws` WebSockets, `better-sqlite3` in `./.data/`.  | implemented |
+| `apps/web`          | React 18 + Vite client: board page, canvas, sticky notes, sync.        | implemented |
+| `e2e`               | Playwright end-to-end suite: real server and build, several browsers.  | implemented |
+| `bench`             | Benchmarks and the report behind `PERFORMANCE.md`.                     | implemented |
 
 Dependency direction: `web` and `server` depend on `protocol` and `crdt`; `protocol` depends on
 `crdt`; `crdt` depends on nothing.
@@ -128,8 +128,8 @@ Source: `packages/crdt/src/aw-map.ts`. Immutable observed-remove map `AwMap<V>` 
 values `V`; the constructor takes a `join(a, b)` for `V` (commutative, associative, idempotent), for
 example `LwwRegister.merge`.
 
-- **Dots.** Every write creates a *dot*: an `OpId` `(n, replica)` where `n` is that replica's next
-  *map* counter (contiguous, taken from the map's version vector). A dot stores the value written
+- **Dots.** Every write creates a _dot_: an `OpId` `(n, replica)` where `n` is that replica's next
+  _map_ counter (contiguous, taken from the map's version vector). A dot stores the value written
   with it. A key is present while at least one of its dots survives.
 - **`put`** `{ key, dot, value, supersedes }`: `supersedes` lists the dots of that key the issuer had
   observed; they are replaced by the new dot. Concurrent writes of one key from different replicas
@@ -163,14 +163,14 @@ runner, which has no test-framework imports). Test-only; not exported from the p
 
 A CRDT plugs in through a `ConvergenceSpec`: `create`, `prepare` (turn a random intent into a list
 of operations using the replica's state and clock), `apply`, `snapshot` (canonical JSON of the
-*entire* state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. States may
+_entire_ state), and optionally `merge`, `observe` (feed the HLC) and `idempotentApply`. States may
 be mutated in place by `apply` (the text sequence does this); such a spec must have an idempotent
 `apply`, and cannot use `merge`. `checkConvergence(spec, { numRuns = 1000, replicas })` then
 generates random scenarios on 3 replicas, or on 3 to 5 with `replicas: { min: 3, max: 5 }`:
 
 - local operations, with the replicas' physical clocks randomly advanced or moved backwards;
-- deliveries of single operations to a replica, chosen at random among those that are *causally
-  ready* (everything the origin had applied when it created the operation is already applied);
+- deliveries of single operations to a replica, chosen at random among those that are _causally
+  ready_ (everything the origin had applied when it created the operation is already applied);
 - redeliveries of already-applied operations (only if `idempotentApply`);
 - a final drain of the remaining operations in a random causally valid order.
 
@@ -239,18 +239,18 @@ interleaves concurrent words in one common case (see "Interleaving" below).
 Question checked: two replicas concurrently type a word at the same position. Each character must
 not be mixed in with the other word's characters.
 
-- **Plain RGA** (insert after a predecessor, siblings by descending id) keeps *forward* typing
+- **Plain RGA** (insert after a predecessor, siblings by descending id) keeps _forward_ typing
   together: each character is inserted after the one typed before it, so a word is a chain and a
-  chain is one subtree. It fails for *backward* typing (a word typed right to left, or any run where
+  chain is one subtree. It fails for _backward_ typing (a word typed right to left, or any run where
   the cursor stays put): every character is inserted after the same predecessor, so the characters
   of both words are siblings and the id order mixes them. Typing `c b a` and `z y x` at the start
   gives ids `A1 c, A2 b, A3 a` and `B1 z, B2 y, B3 x`; descending order gives `xaybzc`. The
   "why the sequence is not plain RGA" tests reproduce this with a 15-line RGA model.
-- **Fugue** puts backward-typed characters on the *left* side: after the first character, each new
+- **Fugue** puts backward-typed characters on the _left_ side: after the first character, each new
   one lands directly before the previous one, which makes it the previous one's left child (the
   insert rule above, with `origin` = the character before the cursor, whose right subtree now
   starts with the previous character). So a backward run is a chain of left children and a forward
-  run a chain of right children. Either way the only siblings are the *first* characters of the
+  run a chain of right children. Either way the only siblings are the _first_ characters of the
   concurrent runs, ordered by id, and each run is a whole subtree that stays contiguous:
   `[alphaOMEGA]` or `[OMEGAalpha]`, never a mix. The word whose first character has the smaller id
   comes first.
@@ -275,18 +275,19 @@ and `board-json.ts` (JSON).
   note's sequence. Operations are immutable data.
 - **Local API.** Each call applies the change and returns the operations to send:
 
-  | Call | Operations returned |
-  | --- | --- |
+  | Call                                                 | Operations returned                                                                    |
+  | ---------------------------------------------------- | -------------------------------------------------------------------------------------- |
   | `createNote({ x, y, color, text })` -> `{ id, ops }` | a map write with all four fields (one timestamp, `z` = top + 1), then the text inserts |
-  | `moveNote(id, x, y)` | one map write; `x` and `y` share a timestamp |
-  | `setColor(id, color)` | one map write |
-  | `bringToFront(id)` | one map write; `z` = top + 1 (the only way to write `z` after creation) |
-  | `editText(id, index, deleteCount, insert)` | text deletes, text inserts, then a map write that re-asserts the note |
-  | `deleteNote(id)` | one map remove of the dots this replica has seen |
+  | `moveNote(id, x, y)`                                 | one map write; `x` and `y` share a timestamp                                           |
+  | `setColor(id, color)`                                | one map write                                                                          |
+  | `bringToFront(id)`                                   | one map write; `z` = top + 1 (the only way to write `z` after creation)                |
+  | `editText(id, index, deleteCount, insert)`           | text deletes, text inserts, then a map write that re-asserts the note                  |
+  | `deleteNote(id)`                                     | one map remove of the dots this replica has seen                                       |
 
   `editText` is `splice` on code points and returns `[]` if nothing changes. Calls on a note that is
   not present throw `UnknownNoteError`; invalid arguments throw `RangeError` before anything changes.
   Reads: `getNote(id)`, `notes()` (bottom to top: by `z`, then id), `size`.
+
 - **Add wins for everything.** Every write to a note is a map write that replaces the dots its author
   saw, so any change made concurrently with a delete keeps the note. In particular **an edit of a
   note's text concurrent with another replica deleting that note keeps the note, with the edit**
@@ -337,11 +338,11 @@ and `board-json.ts` (JSON).
 ### Undo and redo **[implemented]**
 
 Source: `packages/crdt/src/history.ts` (`BoardHistory`). Undo and redo reverse only the local user's
-own changes, never anyone else's, by generating *inverse operations*: an undo is a new edit that
+own changes, never anyone else's, by generating _inverse operations_: an undo is a new edit that
 converges like any other, not a rewind, so it cannot touch what others did. Local edits go through
 the history (`createNote`, `moveNote`, `setColor`, `editText`, `deleteNote`, which forward to the
 `Board` and return its operations); `undo()` and `redo()` return the operations to send. Each step
-is described by what it *did*, in terms that stay true while others edit:
+is described by what it _did_, in terms that stay true while others edit:
 
 - **Text is undone by id, never by index.** A text step names the characters it typed and the
   characters it deleted. Undoing deletes the typed ones wherever they have ended up (a remote edit
@@ -353,12 +354,12 @@ is described by what it *did*, in terms that stay true while others edit:
   `Board.insertTextAfter` (type after a character that may be deleted: a tombstone keeps its place)
   exist for this.
 - **Typed again means new characters.** A deletion cannot be revoked (a tombstone is permanent), so
-  undo types the text anew, and the steps *before* it still name the originals. `Copies` maps each
+  undo types the text anew, and the steps _before_ it still name the originals. `Copies` maps each
   original to the copy that took its place, followed through any number of undos and redos, and is
   applied to the characters to take out and to the `after` anchor. It is keyed by note, because
   character ids are only unique within a note. Two anchors that look natural and failed in testing:
   the character's own tombstone (text typed again goes in front of the old tombstones, so anything
-  that stood between two of them lands behind all the copies) and the previous character *including*
+  that stood between two of them lands behind all the copies) and the previous character _including_
   tombstones (while undoing last step first, that one is a tombstone of a step not yet redone).
   Steps are undone last first, so the visible character before a deletion is there, or has a copy.
 - **Redo is the inverse of the inverse.** Undoing a step yields the step that undoes it, in the same
@@ -368,8 +369,8 @@ is described by what it *did*, in terms that stay true while others edit:
   someone else has moved or recoloured the note since, that value is theirs and the step is skipped.
   A move is one step for `x` and `y`, which are always written together. Raising a note
   (`bringToFront`, done on every click) is not recorded.
-- **A deleted note** is put back (`Board.restoreNote`) with the fields it had, *including their old
-  timestamps*, so anything another replica wrote since wins over it; its text was kept. If the note
+- **A deleted note** is put back (`Board.restoreNote`) with the fields it had, _including their old
+  timestamps_, so anything another replica wrote since wins over it; its text was kept. If the note
   exists already (another user's concurrent edit kept it: add wins) there is nothing to restore. A
   note someone else deleted stays deleted: every step on it is skipped. **A created note** is undone
   by deleting it, text others added included; redo restores it.
@@ -435,7 +436,7 @@ inserts by one replica into one note, each hanging to the right of the one befor
 paste), is one item with the first insert written whole and a code point per character. The same for
 a run of deletes of consecutive counters, up or down. A text edit's re-assertion of its note, which
 repeats the note's latest fields as the replica's next dot, is two bytes or, when it follows an
-insert or delete that continues a run, nothing at all (the run is of *pairs*, which is what typing a
+insert or delete that continues a run, nothing at all (the run is of _pairs_, which is what typing a
 key at a time makes). A put that changes some fields writes only those, with timestamps as
 differences. `decodeOps` gives back exactly the same operations, same key order, so that stored
 operations still compare equal as text; it is strict about its input (every length is checked against
@@ -452,13 +453,13 @@ board's own ids, so the sync layer does not look inside operations; the payload 
 operation's JSON form (`board-json.ts`). Operations of one origin travel in order; operations of
 different origins may arrive in any order because `Board.applyRemote` tolerates that.
 
-| Message | Fields | Purpose |
-| --- | --- | --- |
-| `hello` | `version` (3), `replicaId`, `boardId`, `versionVector` | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own. |
-| `ops` | `ops: [{ origin, seq, op }]`, 1 to 500 | A batch of operations the receiver is missing. A binary frame. |
-| `ack` | `versionVector` | "I hold everything this covers." Sent after receiving operations that were new. |
+| Message    | Fields                                                         | Purpose                                                                                                                                                                                                                          |
+| ---------- | -------------------------------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `hello`    | `version` (3), `replicaId`, `boardId`, `versionVector`         | Opens a connection: who I am and exactly what I hold. Sent by the client, answered by the server with its own.                                                                                                                   |
+| `ops`      | `ops: [{ origin, seq, op }]`, 1 to 500                         | A batch of operations the receiver is missing. A binary frame.                                                                                                                                                                   |
+| `ack`      | `versionVector`                                                | "I hold everything this covers." Sent after receiving operations that were new.                                                                                                                                                  |
 | `presence` | `replicaId`, `state: { cursor, editing, name, color } \| null` | Ephemeral: where the pointer is (board coordinates, or `null`), which note is being edited (or `null`), and the person's name (1 to 80 characters) and colour (`#rrggbb`). Relayed, never stored. `null` means the replica left. |
-| `error` | `code`, `message` | A protocol violation; the sender then closes the connection. |
+| `error`    | `code`, `message`                                              | A protocol violation; the sender then closes the connection.                                                                                                                                                                     |
 
 Error codes: `invalid_message`, `unsupported_version`, `wrong_board`, `unexpected_message`
 (for example `ops` before `hello`), `out_of_order` (an operation skips ahead of its origin's stream)
@@ -499,14 +500,14 @@ board JSON), stores it in canonical form, and rejects the whole batch, leaving t
 for a bad payload, a gap or a conflict. A client may only send presence for itself.
 
 **Presence.** Relayed to the other ready sessions, never stored with the operations or written to
-the database. A client sends its *whole* state each time, so a message never depends on an earlier
+the database. A client sends its _whole_ state each time, so a message never depends on an earlier
 one and a lost or repeated one does no harm. The room keeps, in memory only, the latest state of
 every replica that is on the board, for one purpose: when a client says `hello`, the server follows
 its replies with one `presence` message for each replica already here, so a newcomer sees everyone
 at once and not as they happen to move. That memory goes when the replica leaves, when its
 connection is closed for breaking the protocol (the others are told, as for any departure) and when
 the last client leaves the board and the room is dropped. When a client's connection ends the server
-relays `state: null` for it. A client that is *silent but not gone* (a frozen tab on a connection
+relays `state: null` for it. A client that is _silent but not gone_ (a frozen tab on a connection
 the server has not noticed is dead) is not the server's business: clients drop whoever they have
 not heard from, see "Presence" under the web client. Protocol version 2 changed the state (it had a
 list of selected notes and an optional name); version 3 moved operations into binary frames. A client
@@ -554,16 +555,16 @@ connection is closed with 1011 and the room still matches the disk), then sends 
 **Validation.** Every frame is checked before it reaches the sync logic, and a connection that
 fails a check gets one `error` message and is closed:
 
-| Problem | Close code |
-| --- | --- |
-| binary frame that is not a batch of operations (bad bytes, no operations, more than 500), or a frame whose kind and data disagree | 1003 |
-| larger than the limit (`maxMessageBytes`, default 1 MiB; also enforced by the WebSocket layer, which cuts the connection off with no reply) | 1009 |
-| text that is not JSON, or not valid against the zod schemas | 1008 |
-| first message is not `hello`, or its board id is not acceptable | 1008 |
-| no valid `hello` within `helloTimeoutMs` (default 10 s) | 1008 |
-| protocol violation (bad version, gap, conflict, invalid operation payload, presence for another replica) | 1008 |
-| storage failure | 1011 |
-| the same replica connected again (the older connection is closed) | 4001 |
+| Problem                                                                                                                                     | Close code |
+| ------------------------------------------------------------------------------------------------------------------------------------------- | ---------- |
+| binary frame that is not a batch of operations (bad bytes, no operations, more than 500), or a frame whose kind and data disagree           | 1003       |
+| larger than the limit (`maxMessageBytes`, default 1 MiB; also enforced by the WebSocket layer, which cuts the connection off with no reply) | 1009       |
+| text that is not JSON, or not valid against the zod schemas                                                                                 | 1008       |
+| first message is not `hello`, or its board id is not acceptable                                                                             | 1008       |
+| no valid `hello` within `helloTimeoutMs` (default 10 s)                                                                                     | 1008       |
+| protocol violation (bad version, gap, conflict, invalid operation payload, presence for another replica)                                    | 1008       |
+| storage failure                                                                                                                             | 1011       |
+| the same replica connected again (the older connection is closed)                                                                           | 4001       |
 
 Other connections, and the board, are unaffected. Compression is off, so a small frame cannot expand
 past the limit.
@@ -628,7 +629,7 @@ components are thin.
 **Pages.** `/` makes a board: a new id from `crypto.getRandomValues` (`generateBoardId` from
 `@driftboard/protocol`, the same rule the server enforces) and a client-side navigation to
 `/b/:boardId`. A board page shows the canvas, whether it is online, syncing or offline with the
-number of changes waiting (see "Offline-first approach"), and a *Copy link* button, since the link is
+number of changes waiting (see "Offline-first approach"), and a _Copy link_ button, since the link is
 the only access control (see "Server"). An id the server would refuse is shown as "Not found"
 without opening a socket. The board is read from this device first, so it opens with no network.
 
@@ -666,19 +667,19 @@ released, so one drag is one operation. Notes can be recoloured from six swatche
 **Text and the caret.** The textarea is uncontrolled, so React never overwrites it behind the
 browser's back, and `NoteTextArea` is a thin shell over `createTextBinding` (`lib/text-binding.ts`):
 
-- *The user's change becomes one operation.* `diffText` (`lib/text-diff.ts`) trims the common prefix
+- _The user's change becomes one operation._ `diffText` (`lib/text-diff.ts`) trims the common prefix
   and suffix of the last text the textarea and the document agreed on and the textarea's new value.
   What is left is one replacement, which is the shape of `Board.editText`, so typing, pasting,
   cutting and replacing a selection are each one edit however long. It is counted in code points as
   the board counts, and also in UTF-16 units as the DOM counts; a surrogate pair is never cut in
   half. When a text is ambiguous (typing a second `a` after `a`) the earliest position is chosen.
-- *Remote changes keep the caret.* When the document text changes by other means, `applyRemoteText`
+- _Remote changes keep the caret._ When the document text changes by other means, `applyRemoteText`
   (`lib/caret.ts`) diffs the textarea's current value against it, sets the value, and puts the
   selection back through `mapIndex`: a caret before the change stays, one after it moves with the
   text, one inside replaced text goes to the end of the replacement, and a caret exactly where text
   is inserted stays in front of it. Direction and scroll position are kept. A textarea without
   focus is only updated. Assigning `value` directly would move the caret to the end.
-- *Input method composition.* While a composition (Japanese, Chinese, accents) is in progress
+- _Input method composition._ While a composition (Japanese, Chinese, accents) is in progress
   nothing is reported and nothing is overwritten. Changes to the document are only remembered, and
   when the composition ends its result is reported moved over each of them (`rebaseEdit`), so it
   lands where the user typed and not at an offset others' edits shifted. If the composed text
@@ -715,11 +716,11 @@ to SQLite, never counts as a pending change, and is gone when the page or the co
   (Enter or leaving the field saves, Escape cancels, an empty name is refused). A stored identity
   that does not validate is replaced.
 - **What is sent** (`lib/presence-sender.ts`, `lib/presence.ts`): the whole state `{ cursor, editing,
-  name, color }`. The cursor is the pointer in *board* coordinates (so it is right whatever either
+name, color }`. The cursor is the pointer in _board_ coordinates (so it is right whatever either
   person's pan and zoom is), rounded to whole units, and `null` when the pointer leaves the canvas.
   Panning under a still pointer also counts, since the pointer is then over another part of the
   board. `editing` is the note whose textarea has the focus; it is cleared on blur and when the note
-  is deleted or the page closes. Nothing is sent unless the connection is *online*.
+  is deleted or the page closes. Nothing is sent unless the connection is _online_.
 - **Throttled to 20 a second.** At least 50 ms pass between two messages. A change that finds the
   line free goes out at once; changes that come sooner are merged and the latest state goes out
   when the interval is over, so the end of a movement is never lost. There is one timer, always set
@@ -740,7 +741,7 @@ to SQLite, never counts as a pending change, and is gone when the page or the co
   over the 50 ms steps with a short CSS transition), and a note being edited gets an outline in the
   editor's colour and a "Name is editing" badge. Names are only ever put into the page as text.
 - **Only what changed renders.** `PresenceStore` hands out stable snapshots like `BoardStore`: the
-  list of people, and per note a list of its editors that changes only when *that note's* editors
+  list of people, and per note a list of its editors that changes only when _that note's_ editors
   do. A moving cursor renders the pointers and the list, never a note.
 
 **Not yet:** presence shows the focused note, not the caret or selection inside it. The server
@@ -793,9 +794,9 @@ oddly.
   offline is a normal state, not an error. When the browser reports `online` the client connects at
   once instead of waiting out the delay, and when it reports `offline` it gives up a connection that
   may look open for minutes (`lib/network.ts`).
-- **The indicator** (`lib/indicator.ts`, `SyncIndicator`) shows *Online* when connected and the
-  server has everything, *Syncing…* when connected with changes still going out (and during the
-  first connection attempt, so opening a board does not flash "offline"), and *Offline* with "N
+- **The indicator** (`lib/indicator.ts`, `SyncIndicator`) shows _Online_ when connected and the
+  server has everything, _Syncing…_ when connected with changes still going out (and during the
+  first connection attempt, so opening a board does not flash "offline"), and _Offline_ with "N
   pending changes" when not connected, including while retrying. The syncing state fades in after
   0.4 s so that the few milliseconds every edit spends unacknowledged are not shown.
 - **Merge on reconnect.** Remote operations are applied to the local replica with the same
@@ -808,14 +809,14 @@ oddly.
   `/` and `/b/:boardId` open with no network, and a web app manifest (`src/pwa-manifest.ts`) with
   192 and 512 pixel icons and a maskable icon, which is what makes the browser offer to install it.
   The icons in `public/` come from `scripts/make-icons.mjs`, which draws them with no
-  dependencies. The worker is registered in `main.tsx` and uses the *prompt* flow: a new version
-  waits, `PwaBanner` offers *Reload*, and nothing reloads under someone who is typing. The worker
+  dependencies. The worker is registered in `main.tsx` and uses the _prompt_ flow: a new version
+  waits, `PwaBanner` offers _Reload_, and nothing reloads under someone who is typing. The worker
   only exists in a build (`vite build` then `vite preview` on port 22102), not in `vite dev`. It
   caches the app, not the data: boards come from IndexedDB, and the WebSocket to the sync server is
   not intercepted.
 - **Deterministic core.** Because `packages/crdt` takes its clock and ids as inputs, offline,
   reordering and partition scenarios can be simulated deterministically in unit and property tests,
-  and in the Playwright end-to-end tests (see *End-to-end tests*).
+  and in the Playwright end-to-end tests (see _End-to-end tests_).
 
 **Not yet.** Two tabs of the same board on one device see each other's changes only through the
 server (they share the stored log but each loaded it once), so they do not sync with each other
@@ -847,19 +848,19 @@ the product makes, that everyone ends with the same board.
   inline `transform` and `z-index`, and the textarea's value), so a test sees what a user sees.
   Failed tests keep a Playwright trace for every person.
 - **Convergence.** Every test ends with `expectConverged(people)`: everyone's indicator must say
-  *Online* (connected, nothing left to send), and then every person's board, read from the page and
+  _Online_ (connected, nothing left to send), and then every person's board, read from the page and
   sorted by note id, must be the same on three reads in a row (so two boards that agree by chance on
   the way somewhere else do not pass), or the error says which note differs in which field. It also
   fails on any uncaught error in a page.
-- **Specs** (`e2e/tests`): *concurrent typing* (two people at one place; three before, inside and
+- **Specs** (`e2e/tests`): _concurrent typing_ (two people at one place; three before, inside and
   after a shared text, where the result is exact; one erasing a phrase while another types after it),
-  *concurrent moves* (two people dragging one note, letting go together or one while the other still
+  _concurrent moves_ (two people dragging one note, letting go together or one while the other still
   drags, where the result must be one of the moves whole, never an x from one and a y from the
-  other; three people dragging two notes), *offline* (`context.setOffline(true)`, typing, colouring,
+  other; three people dragging two notes), _offline_ (`context.setOffline(true)`, typing, colouring,
   creating, nothing reaching the others while it lasts, then `setOffline(false)` and a merge of
-  everything; two people offline in one note; many short outages), *server restart* (stop and
+  everything; two people offline in one note; many short outages), _server restart_ (stop and
   restart with edits made while it is down, kill in the middle of typing, a restart for each of three
-  people; a newcomer after the restart gets the whole board from the database) and *reload* (the
+  people; a newcomer after the restart gets the whole board from the database) and _reload_ (the
   same board comes back, a reload in the middle of someone's typing, and a reload while the server is
   away, which keeps what was typed and sends it when the server returns).
 - **Monkey test.** `planMonkey(seed, 200, 3)` (`support/monkey-plan.ts`) is a plan of 200 actions
@@ -879,7 +880,7 @@ the product makes, that everyone ends with the same board.
   geometry, polling, and `SyncServer` (start, stop, kill and restart on the same database, against a
   stand-in server).
 
-**Not covered.** Chromium only. The service worker and offline *page loads* (the PWA) are not
+**Not covered.** Chromium only. The service worker and offline _page loads_ (the PWA) are not
 exercised, because the suite blocks service workers; offline here means a loaded page that loses its
 network. Presence (cursors, who is editing) is not asserted. A server that comes back with an empty
 database is not tried. There are no retries: a failure is a finding.

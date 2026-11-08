@@ -20,7 +20,8 @@ export function createRng(seed: number): Rng {
     return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
   };
   const int = (bound: number): number => {
-    if (!Number.isInteger(bound) || bound < 1) throw new RangeError(`bound must be at least 1, got ${bound}`);
+    if (!Number.isInteger(bound) || bound < 1)
+      throw new RangeError(`bound must be at least 1, got ${bound}`);
     return Math.floor(next() * bound);
   };
   return {

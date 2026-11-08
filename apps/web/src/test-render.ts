@@ -53,6 +53,7 @@ export function flush(change: () => void): void {
  */
 export function typeInto(textarea: HTMLTextAreaElement, text: string): void {
   const { selectionStart, selectionEnd, value } = textarea;
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with an explicit this
   const setter = Object.getOwnPropertyDescriptor(HTMLTextAreaElement.prototype, 'value')?.set;
   if (setter === undefined) throw new Error('textarea has no value setter');
   flush(() => {
@@ -68,6 +69,7 @@ export function typeInto(textarea: HTMLTextAreaElement, text: string): void {
  * that React's value tracking sees a change when the `input` event arrives.
  */
 export function setInputValue(input: HTMLInputElement, value: string): void {
+  // eslint-disable-next-line @typescript-eslint/unbound-method -- called below with an explicit this
   const setter = Object.getOwnPropertyDescriptor(HTMLInputElement.prototype, 'value')?.set;
   if (setter === undefined) throw new Error('input has no value setter');
   flush(() => {

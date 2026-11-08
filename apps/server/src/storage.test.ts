@@ -178,7 +178,12 @@ describe('damaged data', () => {
   });
 
   it('reports a row with an invalid origin', () => {
-    db.prepare('INSERT INTO ops (board_id, origin, seq, payload) VALUES (?, ?, ?, ?)').run(BOARD, 'bad id', 1, '{}');
+    db.prepare('INSERT INTO ops (board_id, origin, seq, payload) VALUES (?, ?, ?, ?)').run(
+      BOARD,
+      'bad id',
+      1,
+      '{}',
+    );
     expect(() => storage.load(BOARD)).toThrow(StorageError);
   });
 });

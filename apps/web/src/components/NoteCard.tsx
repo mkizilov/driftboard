@@ -46,7 +46,13 @@ export const NoteCard = memo(function NoteCard({
     },
     [presence, id],
   );
-  // A note that goes away, or a page that closes, with its person in it: they stop editing it.
+  // A note that goes away, or a page that closes, with its person in it: they stop editing it. A
+  // browser does not blur a focused element that is removed, and this card can stay mounted
+  // (rendering nothing) after its note is deleted.
+  const gone = note === undefined;
+  useEffect(() => {
+    if (gone) presence.stopEditing(id);
+  }, [gone, presence, id]);
   useEffect(
     () => () => {
       presence.stopEditing(id);
@@ -59,11 +65,7 @@ export const NoteCard = memo(function NoteCard({
   const y = note.y + (offset?.y ?? 0);
   return (
     <div
-      className={[
-        'note',
-        offset === null ? '' : 'dragging',
-        editors.length === 0 ? '' : 'edited',
-      ]
+      className={['note', offset === null ? '' : 'dragging', editors.length === 0 ? '' : 'edited']
         .filter(Boolean)
         .join(' ')}
       data-color={note.color}

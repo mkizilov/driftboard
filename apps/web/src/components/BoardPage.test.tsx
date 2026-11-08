@@ -241,15 +241,21 @@ describe('BoardPage', () => {
     });
     expect(badge()).toMatch(/^Offline · \d+ pending changes?$/);
 
+    // Trying again after a failure still counts as offline (see `describeSync`).
     flush(() => {
       mine.connection.retryNow();
     });
-    expect(badge()).toMatch(/^Syncing…/);
+    expect(badge()).toMatch(/^Offline · \d+ pending changes?$/);
 
     flush(() => {
       net.open(must(net.sockets.at(-1)));
     });
     expect(badge()).toBe('Online');
+  });
+
+  it('shows syncing, not offline, while the first connection is being made', async () => {
+    const { badge } = await open({ connect: false });
+    expect(badge()).toBe('Syncing…');
   });
 
   it('marks the state of the indicator for styling', async () => {

@@ -42,7 +42,13 @@ export function parseBoard(raw: readonly RawNote[]): BoardNote[] {
       if (note.id === '' || note.zIndex.trim() === '' || !Number.isFinite(z)) {
         throw new Error(`Not a note: ${JSON.stringify(note)}`);
       }
-      return { id: note.id, ...parseTranslate(note.transform), color: note.color, z, text: note.text };
+      return {
+        id: note.id,
+        ...parseTranslate(note.transform),
+        color: note.color,
+        z,
+        text: note.text,
+      };
     })
     .sort(byId);
 }
@@ -51,7 +57,9 @@ export function parseBoard(raw: readonly RawNote[]): BoardNote[] {
 export function noteIn(board: readonly BoardNote[], id: string): BoardNote {
   const found = board.find((note) => note.id === id);
   if (found === undefined) {
-    throw new Error(`Note ${id} is not on the board; it has ${JSON.stringify(board.map((n) => n.id))}`);
+    throw new Error(
+      `Note ${id} is not on the board; it has ${JSON.stringify(board.map((n) => n.id))}`,
+    );
   }
   return found;
 }

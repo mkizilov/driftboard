@@ -13,9 +13,7 @@ import type { TextEdit } from './text-binding';
 type Listener = () => void;
 
 function sameView(a: NoteView, b: NoteView): boolean {
-  return (
-    a.x === b.x && a.y === b.y && a.z === b.z && a.color === b.color && a.text === b.text
-  );
+  return a.x === b.x && a.y === b.y && a.z === b.z && a.color === b.color && a.text === b.text;
 }
 
 function sortedIds(views: ReadonlyMap<string, NoteView>): readonly string[] {

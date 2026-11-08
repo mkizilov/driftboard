@@ -8,7 +8,10 @@ const RUNS = 2;
 // fresh one. They are made before the runs, which is why there are only as many as the runs.
 const worlds = new Map<string, World[]>();
 for (const wire of [jsonWire, binaryWire]) {
-  worlds.set(wire.name, Array.from({ length: RUNS }, () => prepareWorld(11, size)));
+  worlds.set(
+    wire.name,
+    Array.from({ length: RUNS }, () => prepareWorld(11, size)),
+  );
 }
 
 describe('syncing after 30,000 operations made offline, 10,000 meanwhile by someone else', () => {

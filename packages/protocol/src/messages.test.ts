@@ -112,7 +112,15 @@ describe('message parsing', () => {
       ['a version vector that is not a list', hello, (j) => (j['versionVector'] = {})],
       ['a vector entry with a zero count', hello, (j) => (j['versionVector'] = [['a', 0]])],
       ['a vector entry with a fractional count', hello, (j) => (j['versionVector'] = [['a', 1.5]])],
-      ['a replica twice in the vector', hello, (j) => (j['versionVector'] = [['a', 1], ['a', 2]])],
+      [
+        'a replica twice in the vector',
+        hello,
+        (j) =>
+          (j['versionVector'] = [
+            ['a', 1],
+            ['a', 2],
+          ]),
+      ],
       ['a vector entry with a bad replica id', hello, (j) => (j['versionVector'] = [['a b', 1]])],
       ['a missing version vector', hello, (j) => delete j['versionVector']],
     ];
@@ -223,7 +231,9 @@ describe('frames', () => {
     const ops = { type: 'ops', ops: stamped(a, 1, 5) } as const;
     const bytes = encodeOps(ops.ops);
     expect(parseFrame(bytes)).toEqual({ ok: true, message: ops });
-    expect(parseFrame(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length))).toEqual({
+    expect(
+      parseFrame(bytes.buffer.slice(bytes.byteOffset, bytes.byteOffset + bytes.length)),
+    ).toEqual({
       ok: true,
       message: ops,
     });

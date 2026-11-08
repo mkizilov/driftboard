@@ -55,9 +55,18 @@ function contract(name: string, createDisk: () => Disk) {
       if (a === undefined || b === undefined) throw new Error('no operations');
       await storage.write({ ops: [], held: [[a, 3]] });
       expect((await storage.load()).held).toEqual([[a, 3]]);
-      await storage.write({ ops: operations(1), held: [[a, 4], [b, 2]] });
+      await storage.write({
+        ops: operations(1),
+        held: [
+          [a, 4],
+          [b, 2],
+        ],
+      });
       await storage.write({ ops: [], held: null });
-      expect((await (await disk.open('board-1')).load()).held).toEqual([[a, 4], [b, 2]]);
+      expect((await (await disk.open('board-1')).load()).held).toEqual([
+        [a, 4],
+        [b, 2],
+      ]);
     });
 
     it('keeps boards apart', async () => {

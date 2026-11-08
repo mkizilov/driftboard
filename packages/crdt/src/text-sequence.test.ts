@@ -130,7 +130,12 @@ describe('TextSequence basics', () => {
     expect(s.length).toBe(2);
     const nodes = s.nodes();
     expect(nodes.map((n) => n.value).join('')).toBe('hello');
-    expect(nodes.filter((n) => n.deleted).map((n) => n.value).join('')).toBe('ell');
+    expect(
+      nodes
+        .filter((n) => n.deleted)
+        .map((n) => n.value)
+        .join(''),
+    ).toBe('ell');
   });
 
   it('can insert next to and between tombstones', () => {
@@ -678,7 +683,9 @@ describe('TextSequence convergence harness', () => {
   function expectText(state: TextSequence, expected: readonly string[], what: string): void {
     const actual = state.toString();
     if (actual !== expected.join('')) {
-      throw new Error(`${what} gave ${JSON.stringify(actual)}, expected ${JSON.stringify(expected.join(''))}`);
+      throw new Error(
+        `${what} gave ${JSON.stringify(actual)}, expected ${JSON.stringify(expected.join(''))}`,
+      );
     }
   }
 

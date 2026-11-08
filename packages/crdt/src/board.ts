@@ -171,16 +171,18 @@ export class Board {
       .map(([id, sequence]) => [id, sequence.nodes()] as const)
       .filter(([, nodes]) => nodes.length > 0)
       .sort(([a], [b]) => compareValues(a, b))
-      .map(([id, nodes]): JsonValue => [
-        id,
-        nodes.map((n) => [
-          opIdKey(n.id),
-          n.parent === null ? null : opIdKey(n.parent),
-          n.side,
-          n.value,
-          n.deleted,
-        ]),
-      ]);
+      .map(
+        ([id, nodes]): JsonValue => [
+          id,
+          nodes.map((n) => [
+            opIdKey(n.id),
+            n.parent === null ? null : opIdKey(n.parent),
+            n.side,
+            n.value,
+            n.deleted,
+          ]),
+        ],
+      );
     return {
       version: this.#notes.version.entries().map(([replica, counter]) => [replica, counter]),
       dots: this.#notes

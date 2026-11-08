@@ -2,8 +2,8 @@ import { Board, boardOpToJson, createManualClock, type ReplicaId } from '@driftb
 import type { StampedOp } from '@driftboard/protocol';
 
 /** Unwraps a value a test knows exists (noUncheckedIndexedAccess helper). */
-export function must<T>(value: T | undefined): T {
-  if (value === undefined) throw new Error('expected a value');
+export function must<T>(value: T | null | undefined): T {
+  if (value === undefined || value === null) throw new Error('expected a value');
   return value;
 }
 

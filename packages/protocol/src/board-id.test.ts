@@ -1,11 +1,6 @@
 import fc from 'fast-check';
 import { describe, expect, it } from 'vitest';
-import {
-  BOARD_ID_BYTES,
-  encodeBase64Url,
-  generateBoardId,
-  isValidBoardId,
-} from './board-id';
+import { BOARD_ID_BYTES, encodeBase64Url, generateBoardId, isValidBoardId } from './board-id';
 
 const ALPHABET = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_';
 

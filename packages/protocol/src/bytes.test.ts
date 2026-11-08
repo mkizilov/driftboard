@@ -8,8 +8,23 @@ const written = (write: (writer: ByteWriter) => void): Uint8Array => {
 };
 
 const BOUNDARIES = [
-  0, 1, 127, 128, 255, 256, 16_383, 16_384, 2 ** 21 - 1, 2 ** 21, 2 ** 31 - 1, 2 ** 31, 2 ** 32 - 1,
-  2 ** 32, 2 ** 35, 2 ** 49, 2 ** 53 - 1,
+  0,
+  1,
+  127,
+  128,
+  255,
+  256,
+  16_383,
+  16_384,
+  2 ** 21 - 1,
+  2 ** 21,
+  2 ** 31 - 1,
+  2 ** 31,
+  2 ** 32 - 1,
+  2 ** 32,
+  2 ** 35,
+  2 ** 49,
+  2 ** 53 - 1,
 ];
 
 describe('varints', () => {
@@ -27,7 +42,9 @@ describe('varints', () => {
       written((w) => {
         w.varint(value);
       }).length;
-    expect([0, 127, 128, 16_383, 16_384, 2_097_151, 2_097_152].map(size)).toEqual([1, 1, 2, 2, 3, 3, 4]);
+    expect([0, 127, 128, 16_383, 16_384, 2_097_151, 2_097_152].map(size)).toEqual([
+      1, 1, 2, 2, 3, 3, 4,
+    ]);
     expect(size(2 ** 53 - 1)).toBe(8);
   });
 
@@ -64,7 +81,21 @@ describe('varints', () => {
 
 describe('zigzag numbers', () => {
   it('round-trip both signs, with small magnitudes in few bytes', () => {
-    for (const value of [0, -1, 1, -2, 2, 63, -64, 64, -65, 2 ** 40, -(2 ** 40), 2 ** 51, -(2 ** 51)]) {
+    for (const value of [
+      0,
+      -1,
+      1,
+      -2,
+      2,
+      63,
+      -64,
+      64,
+      -65,
+      2 ** 40,
+      -(2 ** 40),
+      2 ** 51,
+      -(2 ** 51),
+    ]) {
       const bytes = written((w) => {
         w.zigzag(value);
       });
@@ -80,7 +111,16 @@ describe('zigzag numbers', () => {
 
 describe('float64', () => {
   it('round-trips awkward numbers exactly, whatever offset it is written at', () => {
-    for (const value of [0, -0.5, 0.1, Math.PI, 1e300, -1e-300, Number.MAX_VALUE, Number.MIN_VALUE]) {
+    for (const value of [
+      0,
+      -0.5,
+      0.1,
+      Math.PI,
+      1e300,
+      -1e-300,
+      Number.MAX_VALUE,
+      Number.MIN_VALUE,
+    ]) {
       const bytes = written((w) => {
         w.byte(7);
         w.float64(value);
@@ -100,7 +140,15 @@ describe('float64', () => {
 
 describe('strings', () => {
   it('are a count and one varint per UTF-16 unit: a byte each for ASCII, lossless for the rest', () => {
-    for (const text of ['', 'abc', '3@a1b2c3d4', 'é', 'naïve café', '😀 and 😀', 'lone \ud800 surrogate']) {
+    for (const text of [
+      '',
+      'abc',
+      '3@a1b2c3d4',
+      'é',
+      'naïve café',
+      '😀 and 😀',
+      'lone \ud800 surrogate',
+    ]) {
       const bytes = written((w) => {
         w.string(text);
       });

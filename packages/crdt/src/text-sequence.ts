@@ -237,8 +237,10 @@ export class TextSequence {
 
   /** The node after `origin` in document order, which must exist. */
   #successor(origin: TreeNode): CharNode {
-    const next = origin === this.#root ? this.#order.first() : this.#order.after(origin as CharNode);
-    if (next === undefined) throw new Error('Invariant violated: no node after an origin with children');
+    const next =
+      origin === this.#root ? this.#order.first() : this.#order.after(origin as CharNode);
+    if (next === undefined)
+      throw new Error('Invariant violated: no node after an origin with children');
     return next;
   }
 

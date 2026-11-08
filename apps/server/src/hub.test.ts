@@ -395,7 +395,12 @@ describe('compaction', () => {
     const other = connected(hub, b);
     settle(peer, other);
     // Operations that do not continue anyone's log make the tail impossible to fold in.
-    db.prepare('INSERT INTO ops (board_id, origin, seq, payload) VALUES (?, ?, ?, ?)').run(BOARD, 'zz', 9, '{}');
+    db.prepare('INSERT INTO ops (board_id, origin, seq, payload) VALUES (?, ?, ?, ?)').run(
+      BOARD,
+      'zz',
+      9,
+      '{}',
+    );
     peer.author(3);
     settle(peer, other);
     expect(errors.map((e) => e.context)).toEqual([`compacting board ${BOARD}`]);
@@ -428,7 +433,14 @@ describe('invalid data closes the connection', () => {
 
   it('text that is not JSON, and JSON that is not a message', () => {
     const hub = newHub();
-    for (const text of ['not json', '[]', '{}', '{"type":"hello"}', '{"type":"ops","ops":[]}', 'null']) {
+    for (const text of [
+      'not json',
+      '[]',
+      '{}',
+      '{"type":"hello"}',
+      '{"type":"ops","ops":[]}',
+      'null',
+    ]) {
       const peer = raw(hub, text);
       expectRejected(peer, 'invalid_message', CLOSE.policyViolation);
     }
@@ -453,7 +465,11 @@ describe('invalid data closes the connection', () => {
 
   it('a frame whose kind and data disagree', () => {
     expectRejected(raw(newHub(), '', true), 'invalid_message', CLOSE.unsupportedData);
-    expectRejected(raw(newHub(), new Uint8Array([0xdb, 1, 0]), false), 'invalid_message', CLOSE.unsupportedData);
+    expectRejected(
+      raw(newHub(), new Uint8Array([0xdb, 1, 0]), false),
+      'invalid_message',
+      CLOSE.unsupportedData,
+    );
   });
 
   it('messages over the size limit, even valid ones, as text or as bytes', () => {
@@ -531,7 +547,10 @@ describe('invalid data closes the connection', () => {
     const fields = (must(second).op['fields'] ?? {}) as Record<string, unknown>;
     const nowhere = {
       ...must(second),
-      op: { ...must(second).op, fields: { ...fields, x: { value: Number.NaN, at: '000000000001-0000-a' } } },
+      op: {
+        ...must(second).op,
+        fields: { ...fields, x: { value: Number.NaN, at: '000000000001-0000-a' } },
+      },
     };
     // ...and as bytes, where a coordinate that is not a number can still be written.
     peer.say({ type: 'ops', ops: [must(good), nowhere] });

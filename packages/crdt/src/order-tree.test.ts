@@ -56,7 +56,12 @@ describe('OrderTree', () => {
     expect(t.after(a)).toBe(b);
     expect(t.after(d)).toBeUndefined();
     expect([a, b, c, d].map((each) => t.rank(each))).toEqual([0, 1, 2, 3]);
-    expect(sameItems([0, 1, 2, 3].map((i) => t.at(i)), [a, b, c, d])).toBe(true);
+    expect(
+      sameItems(
+        [0, 1, 2, 3].map((i) => t.at(i)),
+        [a, b, c, d],
+      ),
+    ).toBe(true);
   });
 
   it('hides items without losing their place, and says whether it did', () => {

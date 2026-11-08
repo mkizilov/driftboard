@@ -254,7 +254,10 @@ describe('runs', () => {
     const two = board.createNote();
     const ops: BoardOp[] = [...one.ops, ...two.ops];
     for (const [index, char] of Array.from('abcdefgh').entries()) {
-      ops.push(...board.editText(one.id, index, 0, char), ...board.editText(two.id, index, 0, char));
+      ops.push(
+        ...board.editText(one.id, index, 0, char),
+        ...board.editText(two.id, index, 0, char),
+      );
     }
     const all = stream(ops);
     const bytes = encodeOps(all);
@@ -293,7 +296,13 @@ describe('runs', () => {
 
 describe('what must not be joined into a run', () => {
   const a = replicaId('a');
-  const insert = (note: string, counter: number, parent: string | null, value = 'x', side = 'right') => ({
+  const insert = (
+    note: string,
+    counter: number,
+    parent: string | null,
+    value = 'x',
+    side = 'right',
+  ) => ({
     type: 'text-insert',
     noteId: note,
     id: `${counter}@a`,
@@ -486,11 +495,15 @@ describe('encodeOps', () => {
     const insert = { type: 'text-insert', noteId: 'n', id: '1@a', parent: null, side: 'right' };
     expect(() => encodeOps(withOp({ ...insert, value: 'ab' }))).toThrow('one code point');
     expect(() => encodeOps(withOp({ ...insert, value: '' }))).toThrow(BinaryFormatError);
-    expect(() => encodeOps(withOp({ ...insert, value: 'a', side: 'up' }))).toThrow(BinaryFormatError);
+    expect(() => encodeOps(withOp({ ...insert, value: 'a', side: 'up' }))).toThrow(
+      BinaryFormatError,
+    );
     expect(() => encodeOps(withOp({ ...insert, value: 'a', side: 'left' }))).toThrow(
       BinaryFormatError,
     );
-    expect(() => encodeOps(withOp({ ...insert, value: 'a', parent: 7 }))).toThrow(BinaryFormatError);
+    expect(() => encodeOps(withOp({ ...insert, value: 'a', parent: 7 }))).toThrow(
+      BinaryFormatError,
+    );
     expect(() => encodeOps(withOp({ type: 'note-remove', noteId: 'n', dots: [3] }))).toThrow(
       BinaryFormatError,
     );
@@ -594,7 +607,9 @@ describe('decodeOps', () => {
     const deletes = [0xdb, 1, 1, 0, 1, 97, 1, 1, 2, 0, 1, 110, 0, 1, 0xc0, 0x84, 0x3d];
     expect(() => decodeOps(new Uint8Array(deletes))).toThrow('bad length');
     // And one that the group has room for in its header but that is beyond any run.
-    const endless = [0xdb, 1, 1, 0, 1, 97, 1, 0xff, 0xff, 0xff, 0x7f, 2, 0, 1, 110, 0, 1, 0xfe, 0xff, 0xff, 0x7f];
+    const endless = [
+      0xdb, 1, 1, 0, 1, 97, 1, 0xff, 0xff, 0xff, 0x7f, 2, 0, 1, 110, 0, 1, 0xfe, 0xff, 0xff, 0x7f,
+    ];
     expect(() => decodeOps(new Uint8Array(endless))).toThrow('bad length');
   });
 

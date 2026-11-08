@@ -67,10 +67,7 @@ export const ackSchema = z
 export const presenceStateSchema = z
   .object({
     /** The pointer in board coordinates, or `null` when it is not over the board. */
-    cursor: z
-      .object({ x: z.number().finite(), y: z.number().finite() })
-      .strict()
-      .nullable(),
+    cursor: z.object({ x: z.number().finite(), y: z.number().finite() }).strict().nullable(),
     /** The note whose text this person is editing, if any. */
     editing: noteIdSchema.nullable(),
     name: z.string().min(1).max(MAX_NAME_LENGTH),

@@ -254,12 +254,14 @@ describe('AwMap convergence harness', () => {
     },
     snapshot: (state) => ({
       version: state.version.entries(),
-      dots: state.dotEntries().map(({ key, dot, value }) => [
-        key,
-        opIdKey(dot),
-        value.value ?? null,
-        value.timestamp === undefined ? null : formatHlc(value.timestamp),
-      ]),
+      dots: state
+        .dotEntries()
+        .map(({ key, dot, value }) => [
+          key,
+          opIdKey(dot),
+          value.value ?? null,
+          value.timestamp === undefined ? null : formatHlc(value.timestamp),
+        ]),
     }),
   };
 

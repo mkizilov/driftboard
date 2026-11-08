@@ -37,7 +37,11 @@ describe('UndoRedo: the buttons', () => {
 
   it('turn on with the history, undo and redo when pressed, and turn off again', () => {
     const { store, button } = mount();
-    const id = must(store.createNote(1, 2));
+    let created: string | undefined;
+    flush(() => {
+      created = store.createNote(1, 2);
+    });
+    const id = must(created);
     flush(() => {
       store.moveNote(id, 30, 40);
     });

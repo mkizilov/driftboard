@@ -107,7 +107,10 @@ describe('describeDifference', () => {
   });
 
   it('names notes that are missing or extra', () => {
-    const text = describeDifference([[note('a'), note('b')], [note('a'), note('c')]]);
+    const text = describeDifference([
+      [note('a'), note('b')],
+      [note('a'), note('c')],
+    ]);
     expect(text).toContain('context 1: note b is missing');
     expect(text).toContain('context 1: note c is extra');
   });
@@ -186,7 +189,9 @@ describe('awaitSameBoards', () => {
     let at = 0;
     const flapping = () => {
       at += 1;
-      return Promise.resolve(at % 2 === 0 ? [[note('a')], [note('a')]] : [[note('a')], [note('b')]]);
+      return Promise.resolve(
+        at % 2 === 0 ? [[note('a')], [note('a')]] : [[note('a')], [note('b')]],
+      );
     };
     await expect(awaitSameBoards(flapping, { intervalMs: 1, timeoutMs: 30 })).rejects.toThrow(
       /still differ|3 reads in a row/,

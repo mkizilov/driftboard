@@ -229,7 +229,7 @@ describe('a room with several clients', () => {
     }
   });
 
-  it('replaces a replica\'s old session when it reconnects before the old one was noticed', () => {
+  it("replaces a replica's old session when it reconnects before the old one was noticed", () => {
     const { rig, cb } = threeConnected();
     const again = rig.connect(b, cb.store);
     rig.run();
@@ -268,7 +268,7 @@ describe('a room with several clients', () => {
 });
 
 describe('presence through the room', () => {
-  it('relays a client\'s presence to the others, not to itself, and announces its departure', () => {
+  it("relays a client's presence to the others, not to itself, and announces its departure", () => {
     const rig = new Rig();
     const [ca, cb, cc] = [rig.connect(a), rig.connect(b), rig.connect(c)];
     rig.run();
@@ -482,4 +482,3 @@ describe('presence through the room', () => {
     expect(rig.room.store).toBe(emptyStore);
   });
 });
-

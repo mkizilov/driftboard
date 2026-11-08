@@ -40,7 +40,11 @@ describe('isOpId', () => {
     expect(isOpId(opId(1, a))).toBe(true);
     expect(isOpId({ counter: 3, replicaId: 'b' })).toBe(true);
     const bad = [null, undefined, 1, 'x', [], {}, { counter: 0, replicaId: 'a' }];
-    for (const value of [...bad, { counter: 1.5, replicaId: 'a' }, { counter: 1, replicaId: 'a b' }]) {
+    for (const value of [
+      ...bad,
+      { counter: 1.5, replicaId: 'a' },
+      { counter: 1, replicaId: 'a b' },
+    ]) {
       expect(isOpId(value)).toBe(false);
     }
   });
@@ -70,12 +74,14 @@ describe('compareOpIds', () => {
   it('gives every permutation the same sorted result', () => {
     fc.assert(
       fc.property(
-        fc.array(opIdArb, { maxLength: 12 }).chain((ids) =>
-          fc.tuple(
-            fc.constant(ids),
-            fc.shuffledSubarray(ids, { minLength: ids.length, maxLength: ids.length }),
+        fc
+          .array(opIdArb, { maxLength: 12 })
+          .chain((ids) =>
+            fc.tuple(
+              fc.constant(ids),
+              fc.shuffledSubarray(ids, { minLength: ids.length, maxLength: ids.length }),
+            ),
           ),
-        ),
         ([ids, shuffled]) => {
           expect([...shuffled].sort(compareOpIds)).toEqual([...ids].sort(compareOpIds));
         },

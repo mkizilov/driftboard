@@ -82,14 +82,29 @@ export class IdbBoardStorage implements BoardStorage {
     if (batch.ops.length > 0 || batch.held !== null) {
       const tx = this.#db.transaction(['ops', 'sync'], 'readwrite');
       const ops = tx.objectStore('ops');
-      const writes: Promise<unknown>[] = batch.ops.map((op) =>
-        ops.put({ boardId: this.#boardId, origin: op.origin, seq: op.seq, op: op.op }),
-      );
-      if (batch.held !== null) {
-        const held = batch.held.map(([replica, count]): [ReplicaId, number] => [replica, count]);
-        writes.push(tx.objectStore('sync').put({ boardId: this.#boardId, held }));
+      const writes: Promise<unknown>[] = [];
+      try {
+        for (const op of batch.ops) {
+          writes.push(
+            ops.put({ boardId: this.#boardId, origin: op.origin, seq: op.seq, op: op.op }),
+          );
+        }
+        if (batch.held !== null) {
+          const held = batch.held.map(([replica, count]): [ReplicaId, number] => [replica, count]);
+          writes.push(tx.objectStore('sync').put({ boardId: this.#boardId, held }));
+        }
+        await Promise.all([...writes, tx.done]);
+      } catch (error) {
+        // A value that cannot be stored makes `put` throw while the writes are still being queued,
+        // and that does not abort the transaction: abort it, or the writes queued before it commit.
+        for (const pending of [...writes, tx.done]) pending.catch(() => undefined);
+        try {
+          tx.abort();
+        } catch {
+          // Already finished or aborted.
+        }
+        throw error;
       }
-      await Promise.all([...writes, tx.done]);
       this.#tail += batch.ops.length;
     }
     if (this.#tail >= this.#compactAt) await this.compact();

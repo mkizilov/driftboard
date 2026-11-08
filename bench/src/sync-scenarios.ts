@@ -129,7 +129,10 @@ class Network {
     client.conn = conn;
     this.#clients.set(conn, client);
     this.#world.room = roomConnect(this.#world.room, conn);
-    const open = openInitiator({ self: client.replica, boardId: this.#world.boardId }, client.store);
+    const open = openInitiator(
+      { self: client.replica, boardId: this.#world.boardId },
+      client.store,
+    );
     client.session = open.session;
     for (const message of open.send) this.#toServer(client, message);
   }
@@ -269,7 +272,10 @@ export function prepareWorld(seed: number, size: WorldSize): World {
     while (typed < size.charsPerNote) {
       const run = Math.min(size.charsPerNote - typed, 10 + rng.int(70));
       const length = typed;
-      author(world.offline, world.offline.board.editText(id, rng.int(length + 1), 0, sentence(rng, run)));
+      author(
+        world.offline,
+        world.offline.board.editText(id, rng.int(length + 1), 0, sentence(rng, run)),
+      );
       typed += run;
     }
   }

@@ -35,7 +35,11 @@ function pixel(u, v, maskable) {
     const fold = 0.17;
     const along = x - (0.8 - fold) + (y - (0.8 - fold));
     if (x > 0.8 - fold && y > 0.8 - fold) colour = along > fold ? INK : FOLD;
-    for (const [row, right] of [[0.36, 0.7], [0.46, 0.7], [0.56, 0.54]]) {
+    for (const [row, right] of [
+      [0.36, 0.7],
+      [0.46, 0.7],
+      [0.56, 0.54],
+    ]) {
       if (x >= 0.3 && x <= right && Math.abs(y - row) <= 0.016) colour = LINE;
     }
   }

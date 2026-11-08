@@ -8,13 +8,7 @@ import {
   type SetStateAction,
 } from 'react';
 import type { BoardStore } from '../lib/board-store';
-import {
-  applyWheel,
-  panBy,
-  screenDeltaToWorld,
-  type Point,
-  type Viewport,
-} from '../lib/viewport';
+import { applyWheel, panBy, screenDeltaToWorld, type Point, type Viewport } from '../lib/viewport';
 
 /** Scrolling pans the canvas; pinching or Ctrl/Cmd + scrolling zooms around the pointer. */
 export function useWheelZoom(

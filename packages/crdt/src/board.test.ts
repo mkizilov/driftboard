@@ -135,7 +135,10 @@ function applyIntent(board: Board, intent: Intent): BoardOp[] {
     case 'front': {
       const ops = board.bringToFront(id);
       const note = must(board.getNote(id));
-      check(board.notes().every((other) => other.id === id || other.z < note.z), 'front');
+      check(
+        board.notes().every((other) => other.id === id || other.z < note.z),
+        'front',
+      );
       return ops;
     }
     case 'edit': {
@@ -276,12 +279,7 @@ describe('Board: changing notes', () => {
     const board = boardOf('a');
     const { id } = board.createNote({ text: 'ab' });
     const ops = board.editText(id, 0, 1, 'xy');
-    expect(ops.map((op) => op.op.type)).toEqual([
-      'delete',
-      'insert',
-      'insert',
-      'put',
-    ]);
+    expect(ops.map((op) => op.op.type)).toEqual(['delete', 'insert', 'insert', 'put']);
     expect(must(ops[3])).toMatchObject({ type: 'notes' });
     expect(board.editText(id, 1, 0, '')).toEqual([]);
   });

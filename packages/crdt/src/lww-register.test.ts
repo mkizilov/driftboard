@@ -18,8 +18,7 @@ const registerArb = fc
   .array(hlcTimestampArb, { maxLength: 4 })
   .map((timestamps) =>
     timestamps.reduce(
-      (register, timestamp) =>
-        register.apply(register.prepareSet(formatHlc(timestamp), timestamp)),
+      (register, timestamp) => register.apply(register.prepareSet(formatHlc(timestamp), timestamp)),
       LwwRegister.empty<string>(),
     ),
   );
@@ -112,7 +111,7 @@ describe('LwwRegister.merge', () => {
     );
   });
 
-  it('agrees with applying the other side\'s write', () => {
+  it("agrees with applying the other side's write", () => {
     fc.assert(
       fc.property(registerArb, hlcTimestampArb, (x, timestamp) => {
         const op = x.prepareSet(formatHlc(timestamp), timestamp);

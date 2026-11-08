@@ -493,8 +493,8 @@ describe('simulated network of 3 clients and a server', () => {
     let operations = 0;
     fc.assert(
       fc.property(
-        fc.array(actionArb, { maxLength: 80 }),
-        fc.array(fc.nat(), { maxLength: 40 }),
+        fc.array(actionArb, { maxLength: 80, size: 'max' }),
+        fc.array(fc.nat(), { maxLength: 40, size: 'max' }),
         (actions, drainPicks) => {
           const network = new Network(3);
           for (const action of actions) runAction(network, action);
@@ -592,4 +592,3 @@ describe('simulated network of 3 clients and a server', () => {
     expect([...network.room.sessions.keys()]).toHaveLength(3);
   });
 });
-

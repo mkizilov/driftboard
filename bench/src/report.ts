@@ -16,7 +16,14 @@ import {
   serializeBoardOps,
   type BoardOp,
 } from '@driftboard/crdt';
-import { decodeOps, encodeFrame, encodeMessage, encodeOps, stampOps, toBoardOps } from '@driftboard/protocol';
+import {
+  decodeOps,
+  encodeFrame,
+  encodeMessage,
+  encodeOps,
+  stampOps,
+  toBoardOps,
+} from '@driftboard/protocol';
 import {
   buildBoardOps,
   loadBoard,
@@ -104,7 +111,11 @@ function textSection(options: Options): void {
   const sequence = new TextSequence(replicaId('typist'));
   const local = timed(() => runEdits(sequence, script));
   const ops = local.value;
-  row(`local edits, ${n(ops.length)} operations`, `${fixed(local.ms)} ms`, perOp(local.ms, ops.length));
+  row(
+    `local edits, ${n(ops.length)} operations`,
+    `${fixed(local.ms)} ms`,
+    perOp(local.ms, ops.length),
+  );
   const read = timed(() => sequence.toString());
   row('read the text of that sequence once', `${fixed(read.ms, 1)} ms`, '');
 
@@ -131,7 +142,8 @@ function textSection(options: Options): void {
 
   const nodes = sequence.nodes();
   const same =
-    remote.value.toString() === sequence.toString() && scrambled.value.toString() === sequence.toString();
+    remote.value.toString() === sequence.toString() &&
+    scrambled.value.toString() === sequence.toString();
   console.log(
     `\nResult: ${n(sequence.length)} characters shown, ${n(nodes.length)} nodes held ` +
       `(${n(nodes.length - sequence.length)} tombstones). Operations fingerprint ${fingerprint(ops)}; ` +
@@ -177,7 +189,11 @@ function loadSection(options: Options): BoardOp[] {
   row('apply them to a new board', `${fixed(appliedJson.ms)} ms`, `${fixed(appliedBinary.ms)} ms`);
   const shown = timed(() => readEverything(appliedJson.value));
   const shownBinary = timed(() => readEverything(appliedBinary.value));
-  row('read every note, as the screen does', `${fixed(shown.ms)} ms`, `${fixed(shownBinary.ms)} ms`);
+  row(
+    'read every note, as the screen does',
+    `${fixed(shown.ms)} ms`,
+    `${fixed(shownBinary.ms)} ms`,
+  );
   row(
     '**load in all**',
     `**${fixed(parsed.ms + appliedJson.ms + shown.ms)} ms**`,
@@ -194,16 +210,35 @@ function loadSection(options: Options): BoardOp[] {
 }
 
 function syncSection(options: Options, wires: readonly Wire[]): void {
-  const size = { notes: 200, charsPerNote: 100, offlineOps: options.offline, onlineOps: options.online };
+  const size = {
+    notes: 200,
+    charsPerNote: 100,
+    offlineOps: options.offline,
+    onlineOps: options.online,
+  };
   console.log(
     `\n### Syncing after a long offline period (${n(options.offline)} operations made offline, ${n(options.online)} meanwhile by someone else)\n`,
   );
-  row('wire format', 'messages', 'operations moved', 'bytes on the wire', 'time to be in sync', 'converged');
+  row(
+    'wire format',
+    'messages',
+    'operations moved',
+    'bytes on the wire',
+    'time to be in sync',
+    'converged',
+  );
   row('---', '---:', '---:', '---:', '---:', '---');
   for (const wire of wires) {
     const world = prepareWorld(11, size);
     const { ms, value } = timed(() => reconnect(world, wire));
-    row(wire.name, value.messages, n(value.operations), kb(value.bytes), `${fixed(ms)} ms`, String(converged(world)));
+    row(
+      wire.name,
+      value.messages,
+      n(value.operations),
+      kb(value.bytes),
+      `${fixed(ms)} ms`,
+      String(converged(world)),
+    );
   }
 }
 
@@ -213,10 +248,22 @@ function tombstoneSection(): void {
   console.log(
     `\n### Tombstones (a text of ${n(length)} characters, edited ${n(edits)} times: a few characters selected and typed over)\n`,
   );
-  row('edits', 'shown', 'nodes held', 'tombstones', 'heap of the sequence', 'time for these edits', 'per edit');
+  row(
+    'edits',
+    'shown',
+    'nodes held',
+    'tombstones',
+    'heap of the sequence',
+    'time for these edits',
+    'per edit',
+  );
   row('---', '---:', '---:', '---:', '---:', '---:', '---:');
   const start = heapMb();
-  const { rows, sequence } = churn(9, { length, edits, every: 25_000 }, { clock: () => performance.now(), heap: heapMb });
+  const { rows, sequence } = churn(
+    9,
+    { length, edits, every: 25_000 },
+    { clock: () => performance.now(), heap: heapMb },
+  );
   let previous = rows[0];
   for (const each of rows) {
     const spent = each.ms - (previous?.ms ?? 0);

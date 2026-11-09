@@ -7,20 +7,36 @@
 #
 # or, with the volume and the settings in docker-compose.yml:  docker compose up --build
 #
-# Stages: `web-build` builds the web app with the development tools, `server-deps` installs only
-# what the server needs to run, and `runtime` is Node plus those two results and the server's
-# sources. The workspace packages are TypeScript that is read from source (there is no library
-# build step), so the server runs through tsx, as `pnpm start:prod` does.
+# Stages: `base` has Node, a pinned Corepack and the pinned pnpm, `web-build` builds the web app with
+# the development tools, `server-deps` installs only what the server needs to run, and `runtime` is
+# Node plus those two results and the server's sources. The workspace packages are TypeScript that
+# is read from source (there is no library build step), so the server runs through tsx, as
+# `pnpm start:prod` does.
 
 ARG NODE_VERSION=22.12.0
+# The Corepack that Node 22.12.0 bundles (0.29.4) knows only npm's old registry signing key, so it
+# stops with "Cannot find matching keyid" when it fetches any pnpm signed since the key was rotated,
+# and it fetches one even though package.json pins a version. 0.31.0 and later know the new key. This
+# is the newest release whose engines accept Node 22.12.0 (0.35.0 wants 22.22.2): raise both together.
+ARG COREPACK_VERSION=0.34.7
 
-# ---- base: Node and the pnpm this project pins, with the files that decide what is installed -------
+# ---- base: Node, Corepack and the pinned pnpm, with the files that decide what is installed ---------
 FROM node:${NODE_VERSION}-bookworm-slim AS base
+ARG COREPACK_VERSION
 WORKDIR /app
-RUN corepack enable
+# Corepack goes in a prefix of its own, first on PATH, so that the Node tree and the links the image
+# keeps in /usr/local/bin (yarn, yarnpkg) stay as they are. Nothing is switched off: npm checks the
+# package against the integrity the registry publishes, and Corepack checks pnpm's registry signature
+# and the integrity of what it downloads.
+RUN npm install --global --prefix /opt/corepack "corepack@${COREPACK_VERSION}"
+ENV PATH=/opt/corepack/bin:${PATH}
+# pnpm as pinned by "packageManager", downloaded and verified once, here; `web-build` and `server-deps`
+# inherit it, so neither fetches it again and a failure shows up in this stage.
+COPY package.json ./
+RUN corepack install
 # Only manifests, so that the install below is redone when dependencies change and not when sources
 # do. All workspace members are listed because the lockfile covers them all.
-COPY package.json pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
+COPY pnpm-lock.yaml pnpm-workspace.yaml .npmrc ./
 COPY packages/crdt/package.json packages/crdt/
 COPY packages/protocol/package.json packages/protocol/
 COPY apps/server/package.json apps/server/

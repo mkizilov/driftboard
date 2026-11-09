@@ -55,12 +55,17 @@ as on Chromium.
 - **Scope.** On a machine with Docker, run `docker compose up --build` from a clean clone and fix what
   fails: the syntax of the `Dockerfile`, the base image, the `apt-get` step, the cache mount, the
   health check, and the compose options (`read_only`, `cap_drop`, `user`, the bind mount). Run
-  `.github/workflows/check.yml` (both jobs, `check` and `image`) on GitHub for the first time.
-- **Why.** The container and the workflow are deliverables that have never executed: Docker could not
-  be operated here and the repository has not been published. A scratch reproduction of the stages
-  covered the dependency set and the layout of the runtime image, and a static check on 2026-11-08
-  (the Dockerfile parses with `dockerfile-utils` and the compose file validates against the
-  compose-spec schema) covered the syntax of the files. None of it built an image.
+  `.github/workflows/check.yml` (both jobs, `check` and `image`) on GitHub again after the fix below.
+- **Why.** Docker could not be operated here, so no image was ever built from these files. A scratch
+  reproduction of the stages covered the dependency set and the layout of the runtime image, and a
+  static check on 2026-11-08 (the Dockerfile parses with `dockerfile-utils` and the compose file
+  validates against the compose-spec schema) covered the syntax of the files. The first hosted run of
+  the image job then failed before `pnpm install`: the Corepack bundled with Node 22.12.0 (0.29.4)
+  cannot verify pnpm 9.15.9 (`Cannot find matching keyid`). That scratch reproduction had used a
+  project-local pnpm, which is why it missed this. The `Dockerfile` now installs Corepack 0.34.7 and
+  fetches pnpm once, in `base`, and the same instructions pass as plain commands on the official
+  Node 22.12.0 binary (the committed Dockerfile failed there); the image itself has still not been
+  built, and the second hosted run is what shows whether `apt-get`, the base image and the rest work.
 - **Depends on.** A Docker host and a GitHub repository with Actions.
 - **Done when.**
   - `docker build` and `docker compose up --build` succeed from a clean clone;

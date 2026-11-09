@@ -27,6 +27,12 @@ pnpm e2e:install       # once: Playwright's Chromium, into this folder
 pnpm check:all         # pnpm check, then the end-to-end suite (pnpm e2e)
 ```
 
+The Corepack that Node 22.12.0 bundles (0.29.4) cannot verify pnpm 9.15.9, which is signed with npm's
+newer registry key: `pnpm install` stops with `Cannot find matching keyid`, although the version is
+pinned. Install a newer Corepack first, `npm install --global corepack@0.34.7` (the version the
+`Dockerfile` pins), or use a Node release that bundles Corepack 0.31 or later. Do not turn the
+signature check off.
+
 Run the app for development (two terminals, loopback only):
 
 ```sh
@@ -431,7 +437,8 @@ the resulting server was driven by hand in Chromium, which is not an automated t
 worker and the production server's static files are covered by unit tests and by that hand check,
 not by `pnpm e2e`. Nothing has run on a phone, or against a real network (latency, proxies, dropped
 connections), or with many connections at once. Presence is not asserted by the end-to-end suite.
-The GitHub workflow has never run.
+The GitHub workflow has run once, as far as is recorded here: its image job failed at the pnpm
+download (fixed, see `DESIGN.md`) and has not run again.
 
 ## Status
 
@@ -454,8 +461,8 @@ Chromium download).
 | Offline-first: IndexedDB, write-behind, indicator, installable PWA                       | Verified, partial | Tests on fake-indexeddb and random three-device sessions; end-to-end offline with `setOffline`; the PWA by hand in Chromium                                          | The service worker is not in the automated suite (roadmap 11).                                                                                              |
 | End-to-end suite                                                                         | Verified          | 15 of 15 specs on Chromium (45 s) and on WebKit (51 s), one worker, including a seeded monkey test of 200 actions; `E2E_BROWSERS=chromium,webkit pnpm e2e` runs both | Firefox did not start in the sandbox; WebKit is Playwright's build, not Safari; one seed by default.                                                        |
 | Production serving, `pnpm start:prod`                                                    | Verified          | Static-file tests including path traversal; run and driven in Chromium                                                                                               | Runs through `tsx` (roadmap 13); no compression or TLS, use a reverse proxy.                                                                                |
-| `Dockerfile`, `docker-compose.yml`                                                       | Unverified        | Stages reproduced as plain commands from the lockfile; the Dockerfile parses and the compose file validates against the compose-spec (static checks only)            | Never built or run (roadmap 1).                                                                                                                             |
-| GitHub workflow `check.yml`                                                              | Unverified        | none                                                                                                                                                                 | Never ran (roadmap 1).                                                                                                                                      |
+| `Dockerfile`, `docker-compose.yml`                                                       | Unverified        | Stages reproduced as plain commands from the lockfile; the Dockerfile parses and the compose file validates against the compose-spec (static checks only)            | The hosted image job failed at the pnpm download (Corepack key); fixed, not yet re-run. Never built here (roadmap 1).                                       |
+| GitHub workflow `check.yml`                                                              | Unverified        | one hosted run, reported to me: the image job failed (now fixed); the other job's result was not recorded here                                                       | Not re-run since the fix (roadmap 1).                                                                                                                       |
 | Performance work: tree index, binary encoding                                            | Verified          | `bench:report` before and after; `pnpm bench` passes                                                                                                                 | Loading a board and syncing barely moved; one machine; Vitest's spread is wide.                                                                             |
 | Dependency security                                                                      | Partial           | `pnpm audit`; `ws` brought to a patched version                                                                                                                      | `zod` 3 (high) and `esbuild` through `tsx` in production; critical and high in development tools (roadmap 2).                                               |
 | Collecting tombstones, compacting version vectors, truncating the log                    | Planned           | none                                                                                                                                                                 | Design in `PERFORMANCE.md` (roadmap 17).                                                                                                                    |

@@ -52,7 +52,8 @@ separate library build step. The server runs through `tsx`.
 ## Commands
 
 Run from the repository root. Node is pinned by `.nvmrc` / `engines` (22.12) and pnpm by
-`packageManager` (9.15.9, through corepack on an ordinary machine). Here the host has neither in that
+`packageManager` (9.15.9, through Corepack on an ordinary machine; the Corepack bundled with Node
+22.12.0 cannot fetch it, see the README's quick start). Here the host has neither in that
 version, so both are installed under `.agent-local/tools`: run `source .agent-local/env.sh` first, which
 puts them on `PATH` and points HOME and every cache at `.agent-local`. Any Node 22.12 with pnpm 9 does
 as well.
@@ -140,9 +141,13 @@ Not verified:
   compose file validated against the compose-spec JSON schema, with deliberately broken copies
   rejected by both (scratch checks, not in the repository). That covers the dependency set, the layout
   and the syntax of the files, not the base image, `apt-get`, the cache mount, the health check or
-  what the compose options do at runtime.
-- **`.github/workflows/check.yml` has never run** on GitHub (the repository has not been published
-  from here), including its container job.
+  what the compose options do at runtime. The Dockerfile's `base`, `web-build` and `server-deps`
+  instructions were also run as plain commands on the official Node 22.12.0 binary, with the old
+  Dockerfile failing and the new one passing (macOS arm64, not Docker).
+- **`.github/workflows/check.yml`** ran once on GitHub, as reported to me: the container job failed
+  at the pnpm download (the bundled Corepack could not verify pnpm; the `Dockerfile` now installs a
+  pinned Corepack, `DESIGN.md` has the details), and it has not run since. The other job's result
+  was not reported to me.
 - Firefox (it cannot start in the development sandbox: its own sandbox is refused), Safari itself
   (the suite has passed on Playwright's WebKit build), touch devices, a real network (latency,
   proxies, dropped connections), many connections at once, and accessibility beyond the labels the

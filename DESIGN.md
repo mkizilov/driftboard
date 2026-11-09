@@ -1070,9 +1070,14 @@ nosniff`, `Referrer-Policy: no-referrer` (the board id is in the address and is 
 DRIFTBOARD_STATIC_DIR=../web/dist node --import tsx src/main.ts` in `apps/server`. `tsx` is a
   runtime dependency of the server for this reason: the workspace packages are TypeScript that is
   read from source, there is no library build.
-- **`Dockerfile`**, four stages. `base` has Node 22.12 (the pinned version), corepack's pnpm and only
-  the manifests (so the install layer is rebuilt when dependencies change and not when sources
-  do). `web-build` installs what the web app needs (`--filter "@driftboard/web..."`, from the
+- **`Dockerfile`**, four stages. `base` has Node 22.12 (the pinned version); a pinned Corepack
+  (`COREPACK_VERSION`, 0.34.7, installed with npm into its own prefix, `/opt/corepack`, first on
+  `PATH`); the pnpm that `packageManager` names, fetched and verified once by `corepack install`, so
+  that the two stages below inherit it; and only the manifests (so the install layer is rebuilt when
+  dependencies change and not when sources do). Corepack is installed because the one Node 22.12.0
+  bundles (0.29.4) knows only npm's old registry signing key and cannot verify pnpm 9.15.9, which is
+  signed with the new one; 0.31.0 and later know it, and 0.34.7 is the newest whose `engines` accept
+  Node 22.12.0 (0.35.0 wants 22.22.2), so the two versions are raised together. `web-build` installs what the web app needs (`--filter "@driftboard/web..."`, from the
   lockfile) and runs `build:prod`. `server-deps` installs only the server's production dependencies
   (`--prod --filter "@driftboard/server..."`: 46 packages, no test or lint tools). `runtime` is a
   plain Node image with that `node_modules`, the sources of the server and the two workspace
@@ -1094,6 +1099,18 @@ DRIFTBOARD_STATIC_DIR=../web/dist node --import tsx src/main.ts` in `apps/server
   appeared in the data directory. That checks the dependency story and the layout, which are the
   likeliest things to be wrong, but not the Dockerfile's syntax, the base image, the `apt-get` step,
   the cache mount, the health check or the compose options.
+- **The first hosted run of the `image` job failed, and this is why.** `web-build` and `server-deps`
+  stopped before `pnpm install` with `Cannot find matching keyid`. The scratch reproduction above had
+  used the project-local pnpm and never Corepack, so it could not have shown it. The failure was
+  reproduced with the official Node 22.12.0 binary: its bundled Corepack (0.29.4) fails the same way,
+  from `fetchLatestStableVersion`, although `packageManager` pins a version. The fix (the `base` stage
+  above) was checked by running the instructions of `base`, `native` (without `apt-get`), `web-build`
+  (with `build:prod`) and `server-deps` as plain commands on that binary: the committed Dockerfile
+  fails at the `web-build` install, the new one passes all four stages, and pnpm is downloaded once.
+  Two controls show that verification is still on: with only npm's old key trusted, Corepack 0.34.7
+  refuses pnpm (`not signed by any trusted keys`), and with a wrong hash in `packageManager` it stops
+  with `Mismatch hashes`. This ran on macOS arm64, not in Docker: the base image, `apt-get`, Linux and
+  the image build itself are for the hosted job to show.
 
 ## Local-only environment
 
